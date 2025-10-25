@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WASM Test Harness</title>
+</head>
+<body>
+  <script type="module">
+    import { ZstdDecoder } from 'http://localhost:42069/packages/zstd-wasm-decoder/dist/zstd-wasm.js';
+    
+    async function loadDictionary(name) {
+      try {
+        const response = await fetch(`http://localhost:42069/dictionaries/${name}`);
+        if (!response.ok) return null;
+        return new Uint8Array(await response.arrayBuffer());
+      } catch {
+        return null;
+      }
+    }
+    
+    // Load and compile WASM module once (reuse for all decoders)
+    const wasmUrl = 'http://localhost:42069/packages/zstd-wasm-decoder/dist/zstd-decoder.wasm';
+    const wasmModule = await WebAssembly.compileStreaming(fetch(wasmUrl));
+    
+    // Load all dictionaries
+    const dictionaries = {
+      test: await loadDictionary('test.dict'),
+      json: await loadDictionary('test.json.dict'),
+      http: await loadDictionary('../edge-cases/golden-dictionaries/http-dict-missing-symbols'),
+      zeroWeight: await loadDictionary('../edge-cases/dict-files/zero-weight-dict'),
+    };
+
+    const decoders = new Map();
+    
+    // No-dict decoder
+    const mainDecoder = new ZstdDecoder({
+      maxSrcSize: 100 * 1024 * 1024,
+      maxDstSize: 100 * 1024 * 1024
+    });
+    await mainDecoder.init(wasmModule);
+    decoders.set('', mainDecoder);
+    
+    // Dict decoders
+    for (const [name, dict] of Object.entries(dictionaries)) {
+      if (dict) {
+        const decoder = new ZstdDecoder({
+          maxSrcSize: 100 * 1024 * 1024,
+          maxDstSize: 100 * 1024 * 1024,
+          dictionary: dict
+        });
+        await decoder.init(wasmModule);
+        decoders.set(name, decoder);
+      }
+    }
+    
+    // Expose API
+    window.ZstdWasm = {
+      ready: true,
+      
+      decompressSync: (data, opts = {}) => {
+        const dictName = opts.dictionary ? getDictName(opts.dictionary) : '';
+        const decoder = decoders.get(dictName) || mainDecoder;
+        return decoder.decompressSync(data);
+      },
+      
+      decompressStream: (data, isFirst = false, opts = {}) => {
+        const dictName = opts.dictionary ? getDictName(opts.dictionary) : '';
+        const decoder = decoders.get(dictName) || mainDecoder;
+        return decoder.decompressStream(data, isFirst);
+      },
+      
+      decompress: (data, opts) => window.ZstdWasm.decompressSync(data, opts),
+    };
+    
+    function getDictName(dictData) {
+      for (const [name, dict] of Object.entries(dictionaries)) {
+        if (dict && arraysEqual(dictData, dict)) return name;
+      }
+      return '';
+    }
+    
+    function arraysEqual(a, b) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < Math.min(100, a.length); i++) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+    
+    console.log('✅ WASM decoder initialized with dictionaries:', Object.keys(dictionaries).filter(k => dictionaries[k]));
+  </script>
+</body>
+</html>
+

@@ -1,0 +1,5 @@
+[submodule "vendor/zstd"]
+	path = vendor/zstd
+	url = https://github.com/facebook/zstd.git
+	branch = release
+	ignore = dirty
