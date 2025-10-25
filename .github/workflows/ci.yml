@@ -1,14 +1,16 @@
 name: CI
 
 on:
-  workflow_dispatch:
   push:
+    branches: [main]
     tags:
       - 'v*'
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout code
