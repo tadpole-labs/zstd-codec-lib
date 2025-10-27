@@ -83,7 +83,7 @@ export function decompress(
   input: Uint8Array,
   options?: CreateDecoderOptions
 ): Uint8Array {
-  if (!isInitialized) createDecoder(options);
+  createDecoder(options);
   return decoder.decompressStream(input, true).buf;
 }
 
@@ -95,7 +95,7 @@ export function decompressStream(
   reset = false,
   options?: CreateDecoderOptions
 ): StreamResult {
-  if (!isInitialized) createDecoder(options);
+  createDecoder(options);
   return decoder.decompressStream(input, reset);
 }
 
@@ -107,6 +107,6 @@ export function decompressSync(
   expectedSize?: number,
   options?: CreateDecoderOptions
 ): Uint8Array {
-  if (!isInitialized) createDecoder(options);
+  createDecoder(options);
   return decoder.decompressSync(input, expectedSize);
 }

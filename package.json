@@ -1,8 +1,6 @@
 {
   "name": "zstd-codec-lib",
   "version": "0.1.0",
-  "sideEffects": false,
-  "type": "module",
   "workspaces": [
     "packages/*"
   ],
@@ -40,5 +38,6 @@
     "esbuild": "0.25.11",
     "rollup": "4.52.5",
     "terser": "5.44.0"
-  }
+  },
+  "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
 }
