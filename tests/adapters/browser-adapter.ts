@@ -37,7 +37,7 @@ export class BrowserAdapter {
       return window.ZstdWasm?.ready === true;
     }, { timeout: 10000 });
     
-    console.log(`✅ ${this.options.browser} initialized`);
+    console.log(`${this.options.browser} initialized`);
   }
   
   compress(data: Buffer | Uint8Array, opts = {}): Buffer {
@@ -88,7 +88,7 @@ export class BrowserAdapter {
     return Buffer.from(resultBase64, 'base64');
   }
   
-  async decompressStream(data: Buffer | Uint8Array, isFirst = false, opts: any = {}): Promise<{ buf: Buffer; code: number; input_offset: number }> {
+  async decompressStream(data: Buffer | Uint8Array, isFirst = false, opts: any = {}): Promise<{ buf: Buffer; code: number; in_offset: number }> {
     if (!this.page) throw new Error('Browser not initialized');
     const base64 = Buffer.from(data).toString('base64');
     const serializedOpts: any = { ...opts };
@@ -130,14 +130,14 @@ export class BrowserAdapter {
       return {
         buf: btoa(binaryStr),
         code: result.code,
-        input_offset: result.input_offset
+        in_offset: result.in_offset
       };
-    }, [base64, isFirst, serializedOpts]) as { buf: string; code: number; input_offset: number };
+    }, [base64, isFirst, serializedOpts]) as { buf: string; code: number; in_offset: number };
     
     return {
       buf: Buffer.from(result.buf, 'base64'),
       code: result.code,
-      input_offset: result.input_offset
+      in_offset: result.in_offset
     };
   }
   

@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-import { decompress, createDecoder } from '../../packages/zstd-wasm-decoder/dist/index.node.js';
+import { decompress, createDecoder } from '../../packages/zstd-wasm-decoder/src/_esm/index.node.js';
 
 interface DecompressionOptions {
   dictionary?: Buffer | Uint8Array;

@@ -28,7 +28,7 @@ export class _DecompressionStream {
         this.writable = native.writable;
         return;
       } else {
-        throw new TypeError(`Unsupported format: ${format} (native DecompressionStream not available)`);
+        throw new TypeError(`${format} not available`);
       }
     }
     
@@ -51,12 +51,11 @@ export class _DecompressionStream {
           
           if (result.buf.length > 0) controller.enqueue(result.buf);
         } catch (error) {
-          controller.error(new Error(`Zstd decompression failed: ${error}`));
+          controller.error(new Error(`decomp err ${error}`));
         }
       },
       
       flush(controller: TransformStreamDefaultController<Uint8Array>) {
-        isFirstChunk = true;
         controller.terminate();
       }
     });

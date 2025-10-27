@@ -3,33 +3,85 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { minify } from 'terser';
-import { deflateRawSync } from 'node:zlib';
+import { deflateRawSync, gzipSync } from 'node:zlib';
 import { execSync } from 'node:child_process';
 
-const DIST_DIR = join(import.meta.dir, 'dist');
-const SRC_DIR = join(import.meta.dir, 'src');
-const WASM_PATH = join(SRC_DIR, 'build/zstd.wasm');
+const PKG_DIR = import.meta.dir;
+const SRC_DIR = join(PKG_DIR, 'src');
+const ESM_DIR = join(SRC_DIR, '_esm');
+const TYPES_DIR = join(SRC_DIR, '_types');
+const BUILD_DIR = join(PKG_DIR, 'build');
+const WASM_SOURCE_PATH = join(BUILD_DIR, 'zstd.wasm');
 
-if (!existsSync(DIST_DIR)) mkdirSync(DIST_DIR, { recursive: true });
+[ESM_DIR, TYPES_DIR].forEach(dir => {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+});
 
-console.log('📦 Building zstd-wasm-decoder bundles...\n');
+if (!existsSync(WASM_SOURCE_PATH)) {
+  console.error('WASM file not found at:', WASM_SOURCE_PATH);
+  console.error('Run `make` first to build the WASM module');
+  process.exit(1);
+}
+
+const wasmStats = Bun.file(WASM_SOURCE_PATH);
+console.log(`WASM bytecode size: ${(await wasmStats.size).toLocaleString()} bytes\n`);
 
 const terserOptions = {
+  ecma: 2020 as const,
+  safari10: false,
+  ie8: false,
+  sourceMap: false,
+
+  // Mb too aggressive
+  keep_classnames: false,
+  keep_fnames: false,
+
+  parse: {
+    html5_comments: false
+  },
   mangle: {
     toplevel: true,
-    reserved: ['_ZSTD_createDCtx', '_ZSTD_freeDCtx', '_ZSTD_createDDict', 
-               '_ZSTD_freeDDict', '_ZSTD_decompress_usingDDict', 
-               '_ZSTD_decompressStream', '_ZSTD_DCtx_reset', 
-               '_ZSTD_DCtx_refDDict', '_ZSTD_isError'],
+    safari10: false,
+    reserved: ['_decompressSync', 'isError', 'malloc'],
     properties: {
-      regex: /^_(?!ZSTD_)/,
+      regex: /^_(?!decompressSync)/,
       reserved: []
     }
   },
   compress: {
+    booleans: true,
+    drop_console: true,
+    drop_debugger: true,
+    dead_code: true,
+    pure_funcs: ['console.log', 'console.info', 'console.debug'],
+    ecma: 2020 as const,
     passes: 2,
     unsafe: true,
-    unsafe_math: true
+    unsafe_arrows: true,
+    unsafe_comps: true,
+    unsafe_Function: true,
+    unsafe_methods: true,
+    unsafe_proto: true,
+    unsafe_regexp: true,
+    unsafe_undefined: true,
+    unsafe_math: true,
+    pure_getters: true,
+    keep_fargs: false,
+    keep_infinity: false,
+    hoist_funs: true,
+    hoist_vars: true,
+    toplevel: true,
+    module: true,
+    global_defs: {
+      DEBUG: false,
+    },
+  },
+  format: {
+    ascii_only: true,
+    comments: false,
+    shebang: false,
+    webkit: true,
+    beautify: false,
   }
 };
 
@@ -40,7 +92,7 @@ const configs = [
     outfile: 'index.web.js',
     format: 'esm',
     target: 'browser',
-    minify: false
+    minify: true
   },
   {
     name: 'Web ESM (minified)',
@@ -56,7 +108,7 @@ const configs = [
     outfile: 'index.node.js',
     format: 'esm',
     target: 'node',
-    minify: false
+    minify: true
   },
   {
     name: 'Core Library',
@@ -64,7 +116,7 @@ const configs = [
     outfile: 'zstd-wasm.js',
     format: 'esm',
     target: 'browser',
-    minify: false
+    minify: true
   },
   {
     name: 'Core Library (minified)',
@@ -79,64 +131,100 @@ const configs = [
 for (const config of configs) {
   const result = await Bun.build({
     entrypoints: [config.entry],
-    outdir: DIST_DIR,
+    outdir: ESM_DIR,
     target: config.target as 'browser' | 'node',
     format: config.format as any,
-    minify: false,
-    naming: config.outfile
+    minify: true,
+    naming: config.outfile,
+    sourcemap: 'none',
+    packages: 'external',
+    external: [],
+    emitDCEAnnotations: true,
+    drop: config.minify ? ['console', 'debugger'] : [],
   });
   
   if (!result.success) {
-    console.error(`❌ Failed to build ${config.name}`);
+    console.error(`Failed to build ${config.name}`);
     for (const log of result.logs) console.error(log);
     continue;
   }
   
   if (config.minify) {
-    const filePath = join(DIST_DIR, config.outfile);
+    const filePath = join(ESM_DIR, config.outfile);
     const minified = await minify(readFileSync(filePath, 'utf8'), terserOptions);
     if (minified.code) writeFileSync(filePath, minified.code);
+    console.log(`Built (minified): ${config.outfile}`);
   } else {
-    console.log(`✅ Built: ${config.outfile}`);
+    console.log(`Built: ${config.outfile}`);
   }
 }
-
-// Pre-compress with deflate-raw level 7 before encoding to base64
-const wasmBase64 = deflateRawSync(readFileSync(WASM_PATH), { level: 7 }).toString('base64');
+/**
+ * Pre-compress with deflate-raw (level 7) before encoding to base64.
+ * 
+ * Yields a smaller bundle size when compressed twice 
+ * 
+ * Opaque + decomp. via DecompressionStreams API
+ * 
+ * .wasm  =>  deflate-raw  =>  base64  =>  .js  => gzip/brotli/zstd
+ * 
+ * Comparatively the cost of an additional network request
+ * to shave off the extra bytes by splitting the .wasm and .js module
+ * 
+ * isn't worth it (for slim modules)
+ */
+const wasmBase64 = deflateRawSync(readFileSync(WASM_SOURCE_PATH), { level: 7 }).toString('base64');
 
 const inlinedResult = await Bun.build({
   entrypoints: [join(SRC_DIR, 'index.web.inlined.ts')],
-  outdir: DIST_DIR,
+  outdir: ESM_DIR,
   target: 'browser',
   format: 'esm',
-  minify: false,
-  naming: 'index.inlined.js'
+  minify: true,
+  naming: 'index.inlined.js',
+  sourcemap: 'none',
+  packages: 'external',
+  external: [],
+  emitDCEAnnotations: true,
+  drop: ['console', 'debugger']
 });
 
 if (inlinedResult.success) {
-  const filePath = join(DIST_DIR, 'index.inlined.js');
+  const filePath = join(ESM_DIR, 'index.inlined.js');
   let code = readFileSync(filePath, 'utf8');
   code = code.replace('__WASM_BASE64_PLACEHOLDER__', wasmBase64);
   writeFileSync(filePath, code);
 
   const minified = await minify(code, terserOptions);
-  if (minified.code) writeFileSync(join(DIST_DIR, 'index.inlined.min.js'), minified.code);
-}
-
-writeFileSync(join(DIST_DIR, 'zstd-decoder.wasm'), readFileSync(WASM_PATH));
-
-try {
-  execSync('npx tsc --project tsconfig.json', {
-    cwd: join(import.meta.dir),
-    stdio: 'inherit'
-  });
-} catch (error) {
-  console.warn('⚠️ Could not generate TypeScript declarations.');
-  try {
-    copyFileSync(join(SRC_DIR, 'types.d.ts'), join(DIST_DIR, 'types.d.ts'));
-  } catch (e) {
-    console.error('❌ Failed to copy types.d.ts:', e);
+  if (minified.code) {
+    writeFileSync(join(ESM_DIR, 'index.inlined.min.js'), minified.code);
+    const gzipBytes = gzipSync(minified.code, { level: 7 }).length;
+    console.log(`Built (minified): index.inlined.min.js - ${gzipBytes.toLocaleString()} bytes (${(gzipBytes / 1024).toFixed(2)} KB) gzipped`);
   }
 }
 
-console.log('\n🎉 Build complete! Files in dist/');
+copyFileSync(WASM_SOURCE_PATH, join(SRC_DIR, 'zstd-decoder.wasm'));
+
+copyFileSync(WASM_SOURCE_PATH, join(ESM_DIR, 'zstd-decoder.wasm'));
+try {
+  execSync('npx tsc --project tsconfig.json', {
+    cwd: PKG_DIR,
+    stdio: 'inherit',
+    env: { ...process.env, FORCE_COLOR: '1' }
+  });
+
+  const standaloneDtsFiles = ['types.d.ts', 'index.d.ts'];
+  
+  for (const file of standaloneDtsFiles) {
+    const srcPath = join(SRC_DIR, file);
+    const destPath = join(TYPES_DIR, file);
+    
+    if (existsSync(srcPath)) {
+      copyFileSync(srcPath, destPath);
+      console.log(`Copied: ${file}`);
+    }
+  }
+  } catch (error) {
+  console.error(error);
+  process.exit(1);
+}
+

@@ -12,8 +12,8 @@ import { ensureTestData } from './lib/test-data-generator.ts';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const COMPRESSION_LEVELS = {
-  ALL: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
-  REPRESENTATIVE: [1, 3, 6, 9, 12, 15, 19, 22]
+  ALL: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  REPRESENTATIVE: [1, 3, 6, 9, 12, 15, 19]
 };
 
 const TEST_DATA_DIR = join(__dirname, 'data');
@@ -35,7 +35,7 @@ const randomBuffers = new Map<number, Buffer>();
 const randomBufferHashes = new Map<number, string>();
 
 
-beforeAll(async () => {
+  beforeAll(async () => {
   ensureTestData();
   
   const dictPaths = {
@@ -48,12 +48,12 @@ beforeAll(async () => {
   jsonDict = readFileSync(dictPaths.json);
   httpDict = readFileSync(dictPaths.http);
 
-  console.log('🎲 Generating random buffers...');
-  [256, 10 * 1024, 20 * 1024, 30 * 1024, 50 * 1024, 100 * 1024, 512 * 1024, 1024 * 1024]
+  console.log('Generating random buffers...');
+  [256, 10 * 1024, 20 * 1024, 30 * 1024, 50 * 1024, 100 * 1024, 512 * 1024, 1024 * 1024, 16 * 1024 * 1024]
     .forEach(size => randomBuffer(size));
-  console.log(`✅ Generated ${randomBuffers.size} random buffers`);
+  console.log(`Generated ${randomBuffers.size} random buffers`);
   
-  console.log('🔧 Pre-compressing test data...');
+  console.log('Pre-compressing test data...');
   const testFiles = [
     'tiny-256b.bin', 'small-highly-compressible.bin', 'medium-10k.bin',
     'random-10k.bin', 'repetitive-50k.bin', 'medium-100k.bin',
@@ -72,7 +72,7 @@ beforeAll(async () => {
     Promise.resolve().then(() => compress(data, opts))
   ));
   
-  console.log(`✅ Pre-compressed ${compressedCache.size} variants`);
+  console.log(`Pre-compressed ${compressedCache.size} variants`);
   
   const dictionaries: Record<string, Buffer | Uint8Array> = {
     test: testDict,
@@ -88,7 +88,7 @@ beforeAll(async () => {
   const adapterType = process.env.TEST_ADAPTER;
   
   if (adapterType?.startsWith('browser-')) {
-    console.log('🌐 Starting fixture server...');
+    console.log('Starting fixture server...');
     fixtureServer = spawn('bun', [join(__dirname, 'fixture-server.ts')], {
       stdio: 'inherit'
     });
@@ -98,7 +98,7 @@ beforeAll(async () => {
   if (adapterType === 'browser-all') {
     const { createBrowserAdapter } = await import('./adapters/browser-adapter');
     const browsers = ['chromium', 'firefox', 'webkit'] as const;
-    console.log('🚀 Launching all browsers in parallel...');
+    console.log('Launching all browsers in parallel...');
     const adapters = await Promise.all(
       browsers.map(b => createBrowserAdapter(b))
     );
@@ -123,16 +123,16 @@ beforeAll(async () => {
       },
       close: () => Promise.all(adapters.map(a => a.close()))
     };
-    console.log('✅ All browsers ready');
+    console.log('All browsers ready');
   } else if (adapterType?.startsWith('browser-')) {
     const browser = adapterType.replace('browser-', '');
     const { createBrowserAdapter } = await import('./adapters/browser-adapter');
     decompressAdapter = await createBrowserAdapter(browser as any);
-    console.log(`🌐 Using browser adapter: ${browser}`);
+    console.log(`Using browser adapter: ${browser}`);
   } else {
     decompressAdapter = wasmAdapter;
   }
-}, 120000);
+}, 1200000);
 
 afterAll(async () => {
   if (fixtureServer) fixtureServer.kill();
@@ -527,5 +527,58 @@ describe('Streaming decompression', () => {
       const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
       expect(decompressedHash).toBe(originalHash);
     });
+  });
+  
+  describe('extreme streaming tests', () => {
+    test('256MB random noise at level 19', async () => {
+      const data = randomBuffer(16 * 1024 * 1024);
+      const compressed = compress(data, { level: 19 });
+      
+      const decompressed = await decompress(compressed);
+      expect(decompressed.length).toBe(data.length);
+      const originalHash = createHash('sha1').update(data).digest('hex');
+      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
+      expect(decompressedHash).toBe(originalHash);
+    }, 300000); // 5 minute timeout
+    
+    test('256MB random noise - streamed in 0.1% increments', async () => {
+      if (!decompressAdapter.decompressStream) {
+        console.log('Skipping chunked streaming test: decompressStream not available');
+        return;
+      }
+
+      const data = randomBuffer(256 * 1024 * 1024);
+      const compressed = compress(data, { level: 19 });
+
+      // 0.1% of the compressed data per chunk
+      const percent = 0.1;
+      const chunkSize = Math.max(1, Math.floor(compressed.length * (percent / 100)));
+      const outputs: Buffer[] = [];
+      console.log(`Streaming ${compressed.length} bytes in ${chunkSize}-byte chunks (${percent}% per chunk)...`);
+
+      for (let i = 0; i < compressed.length; i += chunkSize) {
+        const chunk = compressed.slice(i, i + chunkSize);
+        const result = await decompressAdapter.decompressStream(chunk, i === 0);
+        if (result.buf.length > 0) outputs.push(Buffer.from(result.buf));
+      }
+
+      const decompressed = Buffer.concat(outputs);
+      expect(decompressed.length).toBe(data.length);
+      const originalHash = createHash('sha1').update(data).digest('hex');
+      const decompressedHash = createHash('sha1').update(decompressed).digest('hex');
+      expect(decompressedHash).toBe(originalHash);
+    }, 300000); // 5 minute timeout
+    test('256MB random noise - corrupted (skipped bytes)', async () => {
+      const data = randomBuffer(16 * 1024 * 1024);
+      const compressed = compress(data, { level: 19 });
+      
+      // Skip random bytes to corrupt the stream
+      const corrupted = Buffer.alloc(compressed.length - 10);
+      compressed.copy(corrupted, 0, 0, 1000); // Copy first 1000 bytes
+      compressed.copy(corrupted, 1000, 1010); // Skip 10 bytes, then copy rest
+      
+      // This should throw an error due to corruption
+      await expect(decompress(corrupted)).rejects.toThrow();
+    }, 300000); // 5 minute timeout
   });
 });

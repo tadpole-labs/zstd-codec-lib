@@ -30,26 +30,28 @@ export interface ZstdAdapter {
 
 export const nodeAdapter: ZstdAdapter = {
   compress(data: Buffer | Uint8Array, options: CompressionOptions = {}): Buffer {
-    const { level = 3, dictionary } = options;
+    const level = options.level ?? 3;
+    const dict = (options.dictionary ?? (options as any).dict) as Buffer | Uint8Array | undefined;
     const opts: any = {
       params: { [constants.ZSTD_c_compressionLevel]: level }
     };
-    if (dictionary) opts.dictionary = dictionary;
+    if (dict) opts.dictionary = dict;
     return Buffer.from(zstdCompressSync(data, opts));
   },
   
   decompress(data: Buffer | Uint8Array, options: DecompressionOptions = {}): Buffer {
-    const { dictionary } = options;
-    const opts = dictionary ? { dictionary } : {};
+    const dict = (options.dictionary ?? (options as any).dict) as Buffer | Uint8Array | undefined;
+    const opts = dict ? { dictionary: dict } : {};
     return Buffer.from(zstdDecompressSync(data, opts));
   },
   
   async compressAsync(data: Buffer | Uint8Array, options: CompressionOptions = {}): Promise<Buffer> {
-    const { level = 3, dictionary } = options;
+    const level = options.level ?? 3;
+    const dict = (options.dictionary ?? (options as any).dict) as Buffer | Uint8Array | undefined;
     const opts: any = {
       params: { [constants.ZSTD_c_compressionLevel]: level }
     };
-    if (dictionary) opts.dictionary = dictionary;
+    if (dict) opts.dictionary = dict;
     
     return new Promise((resolve, reject) => {
       zstdCompress(data, opts, (err, result) => {
@@ -60,8 +62,8 @@ export const nodeAdapter: ZstdAdapter = {
   },
   
   async decompressAsync(data: Buffer | Uint8Array, options: DecompressionOptions = {}): Promise<Buffer> {
-    const { dictionary } = options;
-    const opts = dictionary ? { dictionary } : {};
+    const dict = (options.dictionary ?? (options as any).dict) as Buffer | Uint8Array | undefined;
+    const opts = dict ? { dictionary: dict } : {};
     
     return new Promise((resolve, reject) => {
       zstdDecompress(data, opts, (err, result) => {
@@ -71,4 +73,3 @@ export const nodeAdapter: ZstdAdapter = {
     });
   }
 };
-

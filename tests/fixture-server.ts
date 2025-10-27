@@ -55,7 +55,6 @@ const server = Bun.serve({
   }
 });
 
-console.log(`📁 Test fixture server running on http://localhost:${PORT}`);
-console.log(`   Serving files from: ${TEST_DIR}`);
+console.log(`Test fixture server running on http://localhost:${PORT}`);
 
 export { server, PORT };

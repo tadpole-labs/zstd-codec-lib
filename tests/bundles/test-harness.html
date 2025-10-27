@@ -6,7 +6,7 @@
 </head>
 <body>
   <script type="module">
-    import { ZstdDecoder } from 'http://localhost:42069/packages/zstd-wasm-decoder/dist/zstd-wasm.js';
+    import { ZstdDecoder } from 'http://localhost:42069/packages/zstd-wasm-decoder/src/_esm/zstd-wasm.js';
     
     async function loadDictionary(name) {
       try {
@@ -19,7 +19,7 @@
     }
     
     // Load and compile WASM module once (reuse for all decoders)
-    const wasmUrl = 'http://localhost:42069/packages/zstd-wasm-decoder/dist/zstd-decoder.wasm';
+    const wasmUrl = 'http://localhost:42069/packages/zstd-wasm-decoder/src/_esm/zstd-decoder.wasm';
     const wasmModule = await WebAssembly.compileStreaming(fetch(wasmUrl));
     
     // Load all dictionaries
@@ -87,7 +87,7 @@
       return true;
     }
     
-    console.log('✅ WASM decoder initialized with dictionaries:', Object.keys(dictionaries).filter(k => dictionaries[k]));
+    console.log('WASM decoder initialized with dictionaries:', Object.keys(dictionaries).filter(k => dictionaries[k]));
   </script>
 </body>
 </html>

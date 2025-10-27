@@ -22,8 +22,6 @@ const TEST_FILES: Array<[string, string]> = [
 
 export function ensureTestData(): void {
   if (existsSync(join(DATA_DIR, 'large-1m.bin'))) return;
-  
-  console.log('📦 Generating test data...');
   mkdirSync(DATA_DIR, { recursive: true });
   mkdirSync(DICT_DIR, { recursive: true });
   
@@ -63,6 +61,4 @@ export function ensureTestData(): void {
       execSync(`${zstd} --train ${DATA_DIR}/test.json -o ${jsonDictFile} --maxdict=8192`, { stdio: 'pipe' });
     }
   }
-  
-  console.log('✅ Test data ready\n');
 }

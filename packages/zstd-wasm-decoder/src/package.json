@@ -1,0 +1,55 @@
+{
+  "name": "zstd-wasm-decoder",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./_esm/index.node.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "node": {
+        "types": "./_types/index.node.d.ts",
+        "import": "./_esm/index.node.js",
+        "default": "./_esm/index.node.js"
+      },
+      "browser": {
+        "types": "./_types/index.web.d.ts",
+        "import": "./_esm/index.web.js",
+        "default": "./_esm/index.web.js"
+      },
+      "import": "./_esm/index.web.js",
+      "default": "./_esm/index.node.js"
+    },
+    "./inlined": {
+      "types": "./_types/index.web.inlined.d.ts",
+      "import": "./_esm/index.inlined.js",
+      "default": "./_esm/index.inlined.js"
+    },
+    "./wasm": "./zstd-decoder.wasm",
+    "./types": {
+      "types": "./_types/types.d.ts",
+      "default": "./_types/types.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "*": ["./_types/*"],
+      "inlined": ["./_types/index.web.inlined.d.ts"],
+      "types": ["./_types/types.d.ts"]
+    }
+  },
+  "files": [
+    "*.ts",
+    "*.d.ts",
+    "!*.test.ts",
+    "_esm/**/*.js",
+    "_esm/**/*.wasm",
+    "_types/**/*.d.ts",
+    "_types/**/*.d.ts.map",
+    "*.wasm"
+  ],
+  "sideEffects": false,
+  "keywords": ["zstd", "decompression", "wasm", "streaming", "compression"],
+  "license": "MIT"
+}

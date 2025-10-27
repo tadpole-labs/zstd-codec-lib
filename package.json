@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "sideEffects": false,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "npm run test:all-runtimes",
     "test:watch": "vitest watch tests/suite.test.ts",
@@ -14,8 +17,15 @@
     "test:all-runtimes": "npm run test:node && npm run test:browsers && npm run test:node22 && npm run test:node23",
     "fixture-server": "bun tests/fixture-server.ts",
     "generate-data": "bun tests/lib/test-data-generator.ts",
-    "build:all": "bun run build:decoder",
-    "build:decoder": "cd packages/zstd-wasm-decoder/src && make",
+    "build:all": "npm run build:decoder",
+    "build:wasm": "cd packages/zstd-wasm-decoder && make",
+    "build:ts": "cd packages/zstd-wasm-decoder && bun build.ts",
+    "build:decoder": "npm run build:wasm && npm run build:ts",
+    "clean:decoder": "cd packages/zstd-wasm-decoder && rm -rf build src/_esm src/_types src/*.wasm",
+    "bench:setup": "bun tests/benchmark/setup.ts",
+    "bench": "node tests/benchmark/bench-min.js",
+    "bench:bun": "bun tests/benchmark/bench-min.js",
+    "bench:full": "npm run bench:setup && npm run bench && npm run bench:bun",
     "postinstall": "playwright install --with-deps chromium firefox webkit"
   },
   "devDependencies": {
