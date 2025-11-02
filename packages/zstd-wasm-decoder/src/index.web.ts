@@ -3,7 +3,7 @@ import { _internal } from './shared.js';
 export { 
   ZstdDecoder,
   createDecoder,
-  DecompressionStream,
+  ZstdDecompressionStream,
   decompress,
   decompressStream,
   decompressSync
@@ -11,11 +11,8 @@ export {
 
 export type { DecoderOptions, StreamResult } from './types.js';
 
-let wasmModule: WebAssembly.Module | null = null;
-
-WebAssembly.compileStreaming(fetch('./zstd-decoder.wasm')).then(m => wasmModule = m);
-
-_internal.loader = () => {
-  if (!wasmModule) throw new Error('WASM not ready');
-  return wasmModule;
+_internal._loader = async (wasmPath?: string) => {
+  const wasmUrl = wasmPath || new URL('./zstd-decoder.wasm', import.meta.url).href;
+  const response = await fetch(wasmUrl);
+  return await WebAssembly.compileStreaming(response);
 };

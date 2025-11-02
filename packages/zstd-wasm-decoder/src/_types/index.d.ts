@@ -1,23 +1,18 @@
-import type { StreamResult, DecoderOptions } from './types.js';
+export * from './types.js';
 
 /**
- * DecompressionStream that supports both native formats and "zstd"
- * Usage: 
- *   - new DecompressionStream("gzip")  -> native browser API
- *   - new DecompressionStream("zstd")  -> polyfilled WASM module
+ * ZstdDecompressionStream
+ * 
+ * https://streams.spec.whatwg.org/
  */
-export declare class DecompressionStream {
-  readonly readable: ReadableStream<Uint8Array>;
-  readonly writable: WritableStream<Uint8Array>;
+export declare class ZstdDecompressionStream {
+  readonly readable: ReadableStream;
+  readonly writable: WritableStream;
   
   /**
-   * @param format - Compression format ("gzip", "deflate", "deflate-raw", or "zstd")
-   * @param options - Optional dictionary
+   * @param options - Optional dictionary and configuration
    */
-  constructor(format: string, options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  });
+  constructor(options?: ZstdOptions);
 }
 
 /**
@@ -27,10 +22,7 @@ export declare class DecompressionStream {
  */
 export declare function decompress(
   input: Uint8Array,
-  options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  }
+  options?: ZstdOptions
 ): Promise<Uint8Array>;
 
 /**
@@ -42,10 +34,7 @@ export declare function decompress(
 export declare function decompressStream(
   input: Uint8Array,
   reset?: boolean,
-  options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  }
+  options?: ZstdOptions
 ): Promise<StreamResult>;
 
 /**
@@ -57,10 +46,7 @@ export declare function decompressStream(
 export declare function decompressSync(
   input: Uint8Array,
   expectedSize?: number,
-  options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  }
+  options?: ZstdOptions
 ): Promise<Uint8Array>;
 
 /**
@@ -68,10 +54,7 @@ export declare function decompressSync(
  * @param options - Decoder configuration
  */
 export declare function createDecoder(
-  options?: {
-    wasmPath?: string;
-    dictionary?: Uint8Array;
-  }
+  options?: ZstdOptions
 ): Promise<ZstdDecoder>;
 
 /**
@@ -82,16 +65,17 @@ export declare class ZstdDecoder {
   init(wasmModule?: WebAssembly.Module): Promise<ZstdDecoder>;
   decompressStream(data: Uint8Array, reset?: boolean): StreamResult;
   decompressSync(data: Uint8Array, expectedSize?: number): Uint8Array;
+  destroy(): void;
 }
 
-export type { DecoderOptions, StreamResult };
+export type { DecoderOptions, StreamResult, ZstdOptions };
 
 declare const _default: {
   createDecoder: typeof createDecoder;
   decompress: typeof decompress;
   decompressSync: typeof decompressSync;
   decompressStream: typeof decompressStream;
-  DecompressionStream: typeof DecompressionStream;
+  ZstdDecompressionStream: typeof ZstdDecompressionStream;
 };
 
 export default _default;

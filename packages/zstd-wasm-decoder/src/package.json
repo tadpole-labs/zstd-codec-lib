@@ -2,41 +2,66 @@
   "name": "zstd-wasm-decoder",
   "version": "0.1.0",
   "type": "module",
+  "description": "Tiny & Performant Zstd Wasm Module",
+  "keywords": ["zstd", "wasm", "decompression", "streaming", "dictionary", "DecompressionStreams API"],
+  "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause",
+  "bugs": "https://github.com/tadpole-labs/zstd-codec-lib/issues",
   "main": "./_esm/index.node.js",
-  "types": "./index.d.ts",
+  "types": "./_types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./index.d.ts",
+      "types": "./_types/index.d.ts",
       "node": {
         "types": "./_types/index.node.d.ts",
         "import": "./_esm/index.node.js",
         "default": "./_esm/index.node.js"
       },
       "browser": {
-        "types": "./_types/index.web.d.ts",
-        "import": "./_esm/index.web.js",
-        "default": "./_esm/index.web.js"
+        "types": "./_types/index.web.inlined.d.ts",
+        "import": "./_esm/index.inlined.js",
+        "default": "./_esm/index.inlined.js"
       },
-      "import": "./_esm/index.web.js",
+      "development": "./_esm/index.inlined.js",
+      "import": "./_esm/index.inlined.js",
       "default": "./_esm/index.node.js"
     },
-    "./inlined": {
+    "./external": {
+      "types": "./_types/index.web.d.ts",
+      "development": "./_esm/index.inlined.js",
+      "import": "./_esm/index.web.js",
+      "default": "./_esm/index.web.js"
+    },
+    "./cloudflare": {
+      "types": "./_types/index.cloudflare.d.ts",
+      "import": "./_esm/index.cloudflare.js",
+      "default": "./_esm/index.cloudflare.js"
+    },
+    "./perf": {
       "types": "./_types/index.web.inlined.d.ts",
-      "import": "./_esm/index.inlined.js",
-      "default": "./_esm/index.inlined.js"
+      "import": "./_esm/index.inlined.perf.js",
+      "default": "./_esm/index.inlined.perf.js"
+    },
+    "./perf/external": {
+      "types": "./_types/index.web.d.ts",
+      "import": "./_esm/index.web.perf.js",
+      "default": "./_esm/index.web.perf.js"
     },
     "./wasm": "./zstd-decoder.wasm",
+    "./wasm-perf": "./zstd-decoder-perf.wasm",
     "./types": {
-      "types": "./_types/types.d.ts",
-      "default": "./_types/types.d.ts"
+      "types": "./_types/index.d.ts",
+      "default": "./_types/index.d.ts"
     },
     "./package.json": "./package.json"
   },
   "typesVersions": {
     "*": {
       "*": ["./_types/*"],
-      "inlined": ["./_types/index.web.inlined.d.ts"],
-      "types": ["./_types/types.d.ts"]
+      "external": ["./_types/index.web.d.ts"],
+      "cloudflare": ["./_types/index.cloudflare.d.ts"],
+      "perf": ["./_types/index.web.inlined.d.ts"],
+      "perf/external": ["./_types/index.web.d.ts"],
+      "types": ["./_types/index.d.ts"]
     }
   },
   "files": [
@@ -49,7 +74,10 @@
     "_types/**/*.d.ts.map",
     "*.wasm"
   ],
+  "homepage": "https://github.com/tadpole-labs/zstd-codec-lib",
   "sideEffects": false,
-  "keywords": ["zstd", "decompression", "wasm", "streaming", "compression"],
-  "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
 }

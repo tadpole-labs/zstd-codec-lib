@@ -30,6 +30,15 @@
       zeroWeight: await loadDictionary('../edge-cases/dict-files/zero-weight-dict'),
     };
 
+    // Pre-compute dictionary hashes for fast lookup
+    const dictHashes = new Map();
+    for (const [name, dict] of Object.entries(dictionaries)) {
+      if (dict) {
+        const hash = await crypto.subtle.digest('SHA-256', dict);
+        dictHashes.set(bufferToHex(hash), name);
+      }
+    }
+
     const decoders = new Map();
     
     // No-dict decoder
@@ -57,14 +66,14 @@
     window.ZstdWasm = {
       ready: true,
       
-      decompressSync: (data, opts = {}) => {
-        const dictName = opts.dictionary ? getDictName(opts.dictionary) : '';
+      decompressSync: async (data, opts = {}) => {
+        const dictName = opts.dictionary ? await getDictName(opts.dictionary) : '';
         const decoder = decoders.get(dictName) || mainDecoder;
         return decoder.decompressSync(data);
       },
       
-      decompressStream: (data, isFirst = false, opts = {}) => {
-        const dictName = opts.dictionary ? getDictName(opts.dictionary) : '';
+      decompressStream: async (data, isFirst = false, opts = {}) => {
+        const dictName = opts.dictionary ? await getDictName(opts.dictionary) : '';
         const decoder = decoders.get(dictName) || mainDecoder;
         return decoder.decompressStream(data, isFirst);
       },
@@ -72,19 +81,15 @@
       decompress: (data, opts) => window.ZstdWasm.decompressSync(data, opts),
     };
     
-    function getDictName(dictData) {
-      for (const [name, dict] of Object.entries(dictionaries)) {
-        if (dict && arraysEqual(dictData, dict)) return name;
-      }
-      return '';
+    async function getDictName(dictData) {
+      const hash = await crypto.subtle.digest('SHA-256', dictData);
+      return dictHashes.get(bufferToHex(hash)) || '';
     }
     
-    function arraysEqual(a, b) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < Math.min(100, a.length); i++) {
-        if (a[i] !== b[i]) return false;
-      }
-      return true;
+    function bufferToHex(buffer) {
+      return Array.from(new Uint8Array(buffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
     }
     
     console.log('WASM decoder initialized with dictionaries:', Object.keys(dictionaries).filter(k => dictionaries[k]));

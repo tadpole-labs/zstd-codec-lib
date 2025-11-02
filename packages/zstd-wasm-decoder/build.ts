@@ -12,6 +12,13 @@ const ESM_DIR = join(SRC_DIR, '_esm');
 const TYPES_DIR = join(SRC_DIR, '_types');
 const BUILD_DIR = join(PKG_DIR, 'build');
 const WASM_SOURCE_PATH = join(BUILD_DIR, 'zstd.wasm');
+const WASM_PERF_PATH = join(BUILD_DIR, 'zstd-perf.wasm');
+const ROOT_DIR = join(PKG_DIR, '..', '..');
+const LICENSE_PATH = join(ROOT_DIR, 'LICENSE');
+const README_PATH = join(ROOT_DIR, 'README.md');
+
+// Check for --prep flag
+const PREP = process.argv.includes('--prep');
 
 [ESM_DIR, TYPES_DIR].forEach(dir => {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -23,8 +30,16 @@ if (!existsSync(WASM_SOURCE_PATH)) {
   process.exit(1);
 }
 
+if (!existsSync(WASM_PERF_PATH)) {
+  console.error('Perf WASM file not found at:', WASM_PERF_PATH);
+  console.error('Run `make` first to build the WASM module');
+  process.exit(1);
+}
+
 const wasmStats = Bun.file(WASM_SOURCE_PATH);
-console.log(`WASM bytecode size: ${(await wasmStats.size).toLocaleString()} bytes\n`);
+const wasmPerfStats = Bun.file(WASM_PERF_PATH);
+console.log(`WASM size-optimized: ${(await wasmStats.size).toLocaleString()} bytes`);
+console.log(`WASM perf-optimized: ${(await wasmPerfStats.size).toLocaleString()} bytes\n`);
 
 const terserOptions = {
   ecma: 2020 as const,
@@ -78,14 +93,22 @@ const terserOptions = {
   },
   format: {
     ascii_only: true,
-    comments: false,
+    comments: /(@__PURE__|@__NO_SIDE_EFFECTS__|#__PURE__|#__NO_SIDE_EFFECTS__)/,
     shebang: false,
     webkit: true,
     beautify: false,
   }
 };
 
-const configs = [
+const configs: Array<{
+  name: string;
+  entry: string;
+  outfile: string;
+  format: string;
+  target: string;
+  minify: boolean;
+  external?: string[];
+}> = [
   {
     name: 'Web ESM',
     entry: join(SRC_DIR, 'index.web.ts'),
@@ -101,6 +124,15 @@ const configs = [
     format: 'esm',
     target: 'browser',
     minify: true
+  },
+  {
+    name: 'Cloudflare Workers ESM (minified)',
+    entry: join(SRC_DIR, 'index.cloudflare.ts'),
+    outfile: 'index.cloudflare.js',
+    format: 'esm',
+    target: 'node',
+    minify: true,
+    external: ['*.wasm']
   },
   {
     name: 'Node.js ESM',
@@ -134,11 +166,11 @@ for (const config of configs) {
     outdir: ESM_DIR,
     target: config.target as 'browser' | 'node',
     format: config.format as any,
-    minify: true,
+    conditions: config.target === 'browser' ? ['browser', 'import'] : ['node', 'import'],
     naming: config.outfile,
-    sourcemap: 'none',
+    sourcemap: 'linked',
     packages: 'external',
-    external: [],
+    external: config.external || [],
     emitDCEAnnotations: true,
     drop: config.minify ? ['console', 'debugger'] : [],
   });
@@ -173,38 +205,50 @@ for (const config of configs) {
  * isn't worth it (for slim modules)
  */
 const wasmBase64 = deflateRawSync(readFileSync(WASM_SOURCE_PATH), { level: 7 }).toString('base64');
+const wasmPerfBase64 = deflateRawSync(readFileSync(WASM_PERF_PATH), { level: 7 }).toString('base64');
 
-const inlinedResult = await Bun.build({
-  entrypoints: [join(SRC_DIR, 'index.web.inlined.ts')],
-  outdir: ESM_DIR,
-  target: 'browser',
-  format: 'esm',
-  minify: true,
-  naming: 'index.inlined.js',
-  sourcemap: 'none',
-  packages: 'external',
-  external: [],
-  emitDCEAnnotations: true,
-  drop: ['console', 'debugger']
-});
+async function buildInlined(variant: 'size' | 'perf') {
+  const base64 = variant === 'perf' ? wasmPerfBase64 : wasmBase64;
+  const suffix = variant === 'perf' ? '.perf' : '';
+  
+  const result = await Bun.build({
+    entrypoints: [join(SRC_DIR, 'index.web.inlined.ts')],
+    outdir: ESM_DIR,
+    target: 'browser',
+    format: 'esm',
+    minify: true,
+    naming: `index.inlined${suffix}.js`,
+    sourcemap: 'linked',
+    external: [],
+    emitDCEAnnotations: true,
+    drop: ['console', 'debugger']
+  });
 
-if (inlinedResult.success) {
-  const filePath = join(ESM_DIR, 'index.inlined.js');
-  let code = readFileSync(filePath, 'utf8');
-  code = code.replace('__WASM_BASE64_PLACEHOLDER__', wasmBase64);
-  writeFileSync(filePath, code);
+  if (result.success) {
+    const filePath = join(ESM_DIR, `index.inlined${suffix}.js`);
+    let code = readFileSync(filePath, 'utf8');
+    code = code.replace('__WASM_BASE64_PLACEHOLDER__', base64);
+    writeFileSync(filePath, code);
 
-  const minified = await minify(code, terserOptions);
-  if (minified.code) {
-    writeFileSync(join(ESM_DIR, 'index.inlined.min.js'), minified.code);
-    const gzipBytes = gzipSync(minified.code, { level: 7 }).length;
-    console.log(`Built (minified): index.inlined.min.js - ${gzipBytes.toLocaleString()} bytes (${(gzipBytes / 1024).toFixed(2)} KB) gzipped`);
+    const minified = await minify(code, terserOptions);
+    if (minified.code) {
+      writeFileSync(join(ESM_DIR, `index.inlined${suffix}.min.js`), minified.code);
+      const gzipBytes = gzipSync(minified.code, { level: 6 }).length;
+      console.log(`Built (minified): index.inlined${suffix}.min.js - ${gzipBytes.toLocaleString()} bytes (${(gzipBytes / 1024).toFixed(2)} KB) gzipped`);
+    }
   }
 }
 
-copyFileSync(WASM_SOURCE_PATH, join(SRC_DIR, 'zstd-decoder.wasm'));
+await buildInlined('size');
+await buildInlined('perf');
+
+const webJs = readFileSync(join(ESM_DIR, 'index.web.js'), 'utf8');
+const webPerfJs = webJs.replace(/zstd-decoder\.wasm/g, 'zstd-decoder-perf.wasm');
+writeFileSync(join(ESM_DIR, 'index.web.perf.js'), webPerfJs);
+console.log('Built: index.web.perf.js (via string replacement)');
 
 copyFileSync(WASM_SOURCE_PATH, join(ESM_DIR, 'zstd-decoder.wasm'));
+copyFileSync(WASM_PERF_PATH, join(ESM_DIR, 'zstd-decoder-perf.wasm'));
 try {
   execSync('npx tsc --project tsconfig.json', {
     cwd: PKG_DIR,
@@ -216,15 +260,32 @@ try {
   
   for (const file of standaloneDtsFiles) {
     const srcPath = join(SRC_DIR, file);
-    const destPath = join(TYPES_DIR, file);
     
     if (existsSync(srcPath)) {
-      copyFileSync(srcPath, destPath);
+      copyFileSync(srcPath, join(TYPES_DIR, file));
       console.log(`Copied: ${file}`);
     }
   }
   } catch (error) {
   console.error(error);
   process.exit(1);
+}
+
+if (PREP) {
+  console.log('\nCopying root files to src folder...');
+  
+  if (existsSync(LICENSE_PATH)) {
+    copyFileSync(LICENSE_PATH, join(SRC_DIR, 'LICENSE'));
+    console.log('Copied: LICENSE');
+  } else {
+    console.warn('LICENSE file not found at root directory');
+  }
+  
+  if (existsSync(README_PATH)) {
+    copyFileSync(README_PATH, join(SRC_DIR, 'README.md'));
+    console.log('Copied: README.md');
+  } else {
+    console.warn('README.md file not found at root directory');
+  }
 }
 

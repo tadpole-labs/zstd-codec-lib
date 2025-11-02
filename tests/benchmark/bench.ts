@@ -1,28 +1,56 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import * as zlib from 'node:zlib';
 import { 
   decompress as wasmDecompress, 
-  decompressStream as wasmDecompressStream
+  decompressStream as wasmDecompressStream,
+  ZstdDecompressionStream
 } from '../../packages/zstd-wasm-decoder/src/_esm/index.node.js'
 import { loadCompressedFiles } from './util.js';
+
+const dir = join(import.meta.dirname || process.cwd(), 'compressed');
+const metaPath = join(dir, 'metadata.json');
+const fileCount = existsSync(dir) ? readdirSync(dir).filter(f => f.match(/^data-\d+\.zst$/)).length : 0;
+
+if (!existsSync(metaPath) || fileCount < 1000) await import('./setup.js');
 
 const isBun = typeof Bun !== 'undefined';
 const runtime = isBun ? 'Bun' : 'Node.js';
 
-// Helper: Run warmup iterations
+const decompressWithStream = async (buf: Buffer) => {
+  const stream = new ZstdDecompressionStream();
+  const reader = stream.readable.getReader();
+  const writer = stream.writable.getWriter();
+  
+  writer.write(buf);
+  writer.close();
+  
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  
+  return chunks;
+};
+
 const warmup = async (buffers: Buffer[]) => {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 13; i++) {
     for (const buf of buffers) {
       zlib.zstdDecompressSync(buf);
-      if (isBun) Bun.zstdDecompressSync(buf);
+      await new Promise((resolve, reject) => zlib.zstdDecompress(buf, (err, result) => err ? reject(err) : resolve(result)));
+      if (isBun) {
+        Bun.zstdDecompressSync(buf);
+        await Bun.zstdDecompress(buf);
+      }
       await wasmDecompress(buf);
       await wasmDecompressStream(buf, true);
+      await decompressWithStream(buf);
     }
   }
 };
 
-// Helper: Run benchmark
 const runBenchmark = async (
   name: string,
   fn: (buf: Buffer) => Promise<any> | any ,
@@ -31,9 +59,9 @@ const runBenchmark = async (
 ) => {
   let totalMB = 0;
   let totalTime = 0;
-  
+  let start = 0; 
   for (let i = 0; i < buffers.length; i++) {
-    const start = performance.now();
+    start = performance.now();
     await fn(buffers[i]);
     totalTime += performance.now() - start;
     totalMB += fileSizes[i] / 1024 / 1024;
@@ -43,34 +71,35 @@ const runBenchmark = async (
   return { name, mbps };
 };
 
-// Load precompressed data
-const compressedDir = join(import.meta.dirname || __dirname, 'compressed');
-const metadata = JSON.parse(readFileSync(join(compressedDir, 'metadata.json'), 'utf-8'));
-const benchBuffers = loadCompressedFiles(compressedDir).filter((_, idx, arr) => 
+const metadata = JSON.parse(readFileSync(metaPath, 'utf-8'));
+const benchBuffers = loadCompressedFiles(dir).filter((_, idx, arr) => 
   arr.length > metadata.fileCount ? idx < metadata.fileCount : true
 );
-const warmupBuffers = loadCompressedFiles(compressedDir).filter((_, idx, arr) => 
-  arr.length > metadata.fileCount ? idx >= metadata.fileCount : []
-);
 
-await warmup(warmupBuffers);
+await warmup(loadCompressedFiles(dir).filter((_, idx, arr) => 
+  arr.length > metadata.fileCount ? idx >= metadata.fileCount : []
+));
 
 // Run benchmarks
 const results: { name: string; mbps: number; }[] = [];
 
-results.push(await runBenchmark('node:zlib (sync)', buf => zlib.zstdDecompressSync(buf), benchBuffers, metadata.fileSizes));
-results.push(await runBenchmark('node:zlib (async)', buf => 
-  new Promise((resolve, reject) => zlib.zstdDecompress(buf, (err, result) => err ? reject(err) : resolve(result))),
-  benchBuffers, metadata.fileSizes
-));
+
+results.push(await runBenchmark('zstd-wasm (decompress)', buf => wasmDecompress(buf), benchBuffers, metadata.fileSizes));
+results.push(await runBenchmark('zstd-wasm (decompressStream)', buf => wasmDecompressStream(buf, true), benchBuffers, metadata.fileSizes));
+results.push(await runBenchmark('zstd-wasm (DecompressionStream)', buf => decompressWithStream(buf), benchBuffers, metadata.fileSizes));
 
 if (isBun) {
   results.push(await runBenchmark('Bun native (sync)', buf => Bun.zstdDecompressSync(buf), benchBuffers, metadata.fileSizes));
   results.push(await runBenchmark('Bun native (async)', buf => Bun.zstdDecompress(buf), benchBuffers, metadata.fileSizes));
 }
 
-results.push(await runBenchmark('zstd-wasm (decompress)', buf => wasmDecompress(buf), benchBuffers, metadata.fileSizes));
-results.push(await runBenchmark('zstd-wasm (decompressStream)', buf => wasmDecompressStream(buf, true), benchBuffers, metadata.fileSizes));
+
+results.push(await runBenchmark('zlib (sync)', buf => zlib.zstdDecompressSync(buf), benchBuffers, metadata.fileSizes));
+results.push(await runBenchmark('zlib (async)', buf => 
+  new Promise((resolve, reject) => zlib.zstdDecompress(buf, (err, result) => err ? reject(err) : resolve(result))),
+  benchBuffers, metadata.fileSizes
+));
+
 
 // Output results
 console.log(`${'='.repeat(50)}`);
@@ -79,5 +108,3 @@ console.log(`${'='.repeat(50)}`);
 for (const { name, mbps } of results) {
   console.log(`${name.padEnd(30)} ${mbps.toFixed(2).padStart(10)} MB/s`);
 }
-console.log(`${'='.repeat(50)}`);
-

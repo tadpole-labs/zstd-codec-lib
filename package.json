@@ -1,6 +1,8 @@
 {
   "name": "zstd-codec-lib",
   "version": "0.1.0",
+  "private": true,
+  "type": "module",
   "workspaces": [
     "packages/*"
   ],
@@ -12,32 +14,32 @@
     "test:node": "node --version && vitest run tests/suite.test.ts",
     "test:node22": "NODE_VERSION=22 node --version && vitest run tests/suite.test.ts",
     "test:node23": "NODE_VERSION=23 node --version && vitest run tests/suite.test.ts",
+    "test:node24": "NODE_VERSION=24 node --version && vitest run tests/suite.test.ts",
     "test:all-runtimes": "npm run test:node && npm run test:browsers && npm run test:node22 && npm run test:node23",
     "fixture-server": "bun tests/fixture-server.ts",
     "generate-data": "bun tests/lib/test-data-generator.ts",
     "build:all": "npm run build:decoder",
     "build:wasm": "cd packages/zstd-wasm-decoder && make",
     "build:ts": "cd packages/zstd-wasm-decoder && bun build.ts",
+    "build:ts:prep": "cd packages/zstd-wasm-decoder && bun build.ts --prep",
     "build:decoder": "npm run build:wasm && npm run build:ts",
     "clean:decoder": "cd packages/zstd-wasm-decoder && rm -rf build src/_esm src/_types src/*.wasm",
     "bench:setup": "bun tests/benchmark/setup.ts",
-    "bench": "node tests/benchmark/bench-min.js",
-    "bench:bun": "bun tests/benchmark/bench-min.js",
-    "bench:full": "npm run bench:setup && npm run bench && npm run bench:bun",
+    "bench": "bun tests/benchmark/bench.ts",
+    "bench:node": "tsx tests/benchmark/bench.ts",
+    "bench:full": "npm run bench:setup && npm run bench",
     "postinstall": "playwright install --with-deps chromium firefox webkit"
   },
   "devDependencies": {
-    "@types/node": "24.9.1",
-    "@types/bun": "1.3.1",
     "@playwright/test": "1.56.1",
-    "playwright": "1.56.1",
-    "vitest": "4.0.3",
-    "webpack": "5.102.1",
-    "webpack-cli": "6.0.1",
-    "vite": "7.1.12",
+    "@types/bun": "1.3.1",
+    "@types/node": "24.9.2",
     "esbuild": "0.25.11",
-    "rollup": "4.52.5",
-    "terser": "5.44.0"
+    "playwright": "1.56.1",
+    "terser": "5.44.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "4.0.6"
   },
   "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
 }

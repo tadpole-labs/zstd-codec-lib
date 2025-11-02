@@ -1,97 +1,123 @@
-import type { StreamResult, DecoderOptions } from './types.js';
+export * from './types.js';
 
 /**
- * DecompressionStream that supports both native formats and "zstd"
- * Usage: 
- *   - new DecompressionStream("gzip")  -> native browser API
- *   - new DecompressionStream("zstd")  -> polyfilled WASM module
+ * WHATWG Streams API compatible transform stream for decompressing ZSTD data.
+ * 
+ * @see https://streams.spec.whatwg.org/
  */
-export declare class DecompressionStream {
-  readonly readable: ReadableStream<Uint8Array>;
-  readonly writable: WritableStream<Uint8Array>;
+export declare class ZstdDecompressionStream {
+  readonly readable: ReadableStream;
+  readonly writable: WritableStream;
   
   /**
-   * @param format - Compression format ("gzip", "deflate", "deflate-raw", or "zstd")
-   * @param options - Optional dictionary
+   * Creates a new ZSTD decompression transform stream.
+   * 
+   * @param options - Configuration options (dictionary and WASM path)
    */
-  constructor(format: string, options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  });
+  constructor(options?: ZstdOptions);
 }
 
 /**
- * Decompress data completely
- * @param input - Compressed data
- * @param options - Optional configuration including dictionary
+ * Decompresses ZSTD compressed data.
+ * 
+ * @param input - ZSTD compressed data
+ * @param options - Configuration options (dictionary and WASM path)
+ * @returns Decompressed data
  */
 export declare function decompress(
   input: Uint8Array,
-  options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  }
+  options?: ZstdOptions
 ): Promise<Uint8Array>;
 
 /**
- * Decompress a stream of data
- * @param input - Compressed data frame(s)
- * @param reset - Whether to reset the decoder state
- * @param options - Optional configuration including dictionary
+ * Decompresses ZSTD data using the streaming API for chunked processing.
+ * 
+ * @param input - ZSTD compressed data chunk
+ * @param reset - Whether to reset the decompression context
+ * @param options - Configuration options (dictionary and WASM path)
+ * @returns Stream result with decompressed buffer and offset metadata
  */
 export declare function decompressStream(
   input: Uint8Array,
   reset?: boolean,
-  options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  }
+  options?: ZstdOptions
 ): Promise<StreamResult>;
 
 /**
- * Decompress data synchronously (when expected size is known)
- * @param input - Compressed data frame(s)
- * @param expectedSize - Expected size of decompressed data
- * @param options - Optional configuration including dictionary
+ * Decompresses ZSTD data when the expected size is known.
+ * 
+ * @param input - ZSTD compressed data
+ * @param expectedSize - Expected size of the decompressed data
+ * @param options - Configuration options (dictionary and WASM path)
+ * @returns Decompressed data
  */
 export declare function decompressSync(
   input: Uint8Array,
   expectedSize?: number,
-  options?: { 
-    dictionary?: Uint8Array;
-    wasmPath?: string;
-  }
+  options?: ZstdOptions
 ): Promise<Uint8Array>;
 
 /**
- * Create a decoder instance
- * @param options - Decoder configuration
+ * Creates a decoder instance with auto-loaded WASM module.
+ * 
+ * @param options - Configuration options (dictionary and WASM path)
+ * @returns Initialized decoder instance
  */
 export declare function createDecoder(
-  options?: {
-    wasmPath?: string;
-    dictionary?: Uint8Array;
-  }
+  options?: ZstdOptions
 ): Promise<ZstdDecoder>;
 
 /**
- * Lower-level Zstd decoder class
+ * Low-level ZSTD decoder class
  */
 export declare class ZstdDecoder {
+  /**
+   * Creates a new ZSTD decoder instance.
+   * 
+   * @param options - Decoder configuration options
+   */
   constructor(options?: DecoderOptions);
+  
+  /**
+   * Initializes the decoder with a WebAssembly module.
+   * 
+   * @param wasmModule - Compiled WebAssembly module
+   * @returns Promise that resolves to the initialized decoder
+   */
   init(wasmModule?: WebAssembly.Module): Promise<ZstdDecoder>;
+  
+  /**
+   * Decompresses data using the streaming API.
+   * 
+   * @param data - ZSTD compressed data chunk
+   * @param reset - Whether to reset the decompression context
+   * @returns Stream result with decompressed buffer and offset metadata
+   */
   decompressStream(data: Uint8Array, reset?: boolean): StreamResult;
+  
+  /**
+   * Decompresses data synchronously.
+   * 
+   * @param data - ZSTD compressed data
+   * @param expectedSize - Expected size of the decompressed data
+   * @returns Decompressed data
+   */
   decompressSync(data: Uint8Array, expectedSize?: number): Uint8Array;
+  
+  /**
+   * Cleans up decoder resources.
+   */
+  destroy(): void;
 }
 
-export type { DecoderOptions, StreamResult };
+export type { DecoderOptions, StreamResult, ZstdOptions };
 
 declare const _default: {
   createDecoder: typeof createDecoder;
   decompress: typeof decompress;
   decompressSync: typeof decompressSync;
   decompressStream: typeof decompressStream;
-  DecompressionStream: typeof DecompressionStream;
+  ZstdDecompressionStream: typeof ZstdDecompressionStream;
 };
 
 export default _default;

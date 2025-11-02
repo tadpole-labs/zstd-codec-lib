@@ -5,15 +5,12 @@ declare class ZstdDecoder {
     private _memory;
     private _HEAPU8;
     private _HEAPU32;
-    private _view;
     private readonly _options;
-    private _dctx;
+    private _streamInputStructPtr;
+    private _streamOutputStructPtr;
     private _ddict;
     private _srcPtr;
     private _dstPtr;
-    private _streamInputStructPtr;
-    private _streamOutputStructPtr;
-    private _bufferSrcSize;
     private _bufferDstSize;
     constructor(options?: DecoderOptions);
     /**
@@ -21,7 +18,12 @@ declare class ZstdDecoder {
      */
     init(wasmModule: WebAssembly.Module): ZstdDecoder;
     /**
-     * Allocate memory in WASM module with alignment check
+     * Initialize with an existing WebAssembly instance
+     */
+    _initWithInstance(wasmInstance: WebAssembly.Instance, _wasmModule?: WebAssembly.Module): ZstdDecoder;
+    private _initCommon;
+    /**
+     * Allocate memory in WASM module
      */
     private _malloc;
     /**
@@ -37,18 +39,16 @@ declare class ZstdDecoder {
      * @returns Decompressed data
      */
     decompressSync(compressedData: Uint8Array, expectedSize?: number): Uint8Array;
-    private _isError;
     /**
-     * Optimized struct write using Uint32Array when properly aligned
-     * assuming little-endian host.
+     * Optimized struct write using Uint32Array when properly aligned / (JIT)
      */
     private _writeStreamStruct;
     /**
-     * Optimized struct read using Uint32Array when properly aligned
+     * Optimized struct read using Uint32Array
      */
     private _readStreamPos;
     /**
-     * Streaming decompression - can be fed chunks incrementally
+     * Streadming decompression - can be fed chunks incrementally
      *
      * @param input - Input chunk
      * @param reset - Reset stream for new decompression (default: false)
@@ -56,13 +56,9 @@ declare class ZstdDecoder {
      */
     decompressStream(input: Uint8Array, reset?: boolean): StreamResult;
     /**
-     * Concatenate Uint8Arrays
+     * Clean up ZSTD contexts
      */
-    private _concatUint8Arrays;
-    /**
-     * Create a dictionary for decompression
-     */
-    private _createDict;
+    destroy(): void;
 }
 export default ZstdDecoder;
 export { ZstdDecoder };

@@ -10,7 +10,7 @@ import { _internal } from './shared.js';
 export { 
   ZstdDecoder,
   createDecoder,
-  DecompressionStream,
+  ZstdDecompressionStream,
   decompress,
   decompressStream,
   decompressSync
@@ -19,18 +19,18 @@ export {
 export type { DecoderOptions, StreamResult } from './types.js';
 
 const WASM_BASE64 = '__WASM_BASE64_PLACEHOLDER__';
-let wasmModule: WebAssembly.Module | null = null;
 
-(async () => {
+const b64atob = (b64: string) => new TextEncoder().encode(atob(b64)).buffer;
+
+_internal._loader = async () => {
+  const wasmData = typeof (Uint8Array as any).fromBase64 === 'function'
+    ? (Uint8Array as any).fromBase64(WASM_BASE64)
+    : b64atob(WASM_BASE64);
+  
   const binary = await new Response(
-    new Blob([(Uint8Array as any).fromBase64(WASM_BASE64)])
+    new Blob([wasmData])
       .stream()
-      .pipeThrough(new (globalThis as any).DecompressionStream('deflate-raw'))
+      .pipeThrough(new DecompressionStream('deflate-raw'))
   ).arrayBuffer();
-  wasmModule = await WebAssembly.compile(binary);
-})();
-
-_internal.loader = () => {
-  if (!wasmModule) throw new Error('WASM not ready');
-  return wasmModule;
+  return await WebAssembly.compile(binary);
 };

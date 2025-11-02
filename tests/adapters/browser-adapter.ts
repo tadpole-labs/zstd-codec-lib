@@ -7,6 +7,7 @@
  */
 
 import { chromium, firefox, webkit, type Browser, type Page } from 'playwright';
+import type { ZstdOptions, StreamResult } from '../../packages/zstd-wasm-decoder/src/types.js';
 
 interface BrowserAdapterOptions {
   browser: 'chromium' | 'firefox' | 'webkit';
@@ -44,12 +45,12 @@ export class BrowserAdapter {
     throw new Error('Compression not supported in browser (decoder-only)');
   }
   
-  async decompress(data: Buffer | Uint8Array, opts: any = {}): Promise<Buffer> {
+  async decompress(data: Buffer | Uint8Array, opts: ZstdOptions = {}): Promise<Buffer> {
     if (!this.page) throw new Error('Browser not initialized');
     const base64 = Buffer.from(data).toString('base64');
     const serializedOpts: any = { ...opts };
     if (opts.dictionary) {
-      serializedOpts.dictionaryBase64 = Buffer.from(opts.dictionary).toString('base64');
+      serializedOpts.dictionaryBase64 = Buffer.from(opts.dictionary as Uint8Array).toString('base64');
       delete serializedOpts.dictionary;
     }
     
@@ -73,7 +74,7 @@ export class BrowserAdapter {
       }
       
       // @ts-ignore
-      const decompressed = window.ZstdWasm.decompress(bytes, decompressOpts);
+      const decompressed = await window.ZstdWasm.decompress(bytes, decompressOpts);
       let binaryStr = '';
       const chunkSize = 32768
       for (let i = 0; i < decompressed.length; i += chunkSize) {
@@ -88,12 +89,12 @@ export class BrowserAdapter {
     return Buffer.from(resultBase64, 'base64');
   }
   
-  async decompressStream(data: Buffer | Uint8Array, isFirst = false, opts: any = {}): Promise<{ buf: Buffer; code: number; in_offset: number }> {
+  async decompressStream(data: Buffer | Uint8Array, isFirst = false, opts: ZstdOptions = {}): Promise<StreamResult & { buf: Buffer }> {
     if (!this.page) throw new Error('Browser not initialized');
     const base64 = Buffer.from(data).toString('base64');
     const serializedOpts: any = { ...opts };
     if (opts.dictionary) {
-      serializedOpts.dictionaryBase64 = Buffer.from(opts.dictionary).toString('base64');
+      serializedOpts.dictionaryBase64 = Buffer.from(opts.dictionary as Uint8Array).toString('base64');
       delete serializedOpts.dictionary;
     }
     
@@ -117,7 +118,7 @@ export class BrowserAdapter {
       }
       
       // @ts-ignore
-      const result = window.ZstdWasm.decompressStream(bytes, isFirstChunk, decompressOpts);
+      const result = await window.ZstdWasm.decompressStream(bytes, isFirstChunk, decompressOpts);
       let binaryStr = '';
       const chunkSize = 32768;
       for (let i = 0; i < result.buf.length; i += chunkSize) {
@@ -129,14 +130,12 @@ export class BrowserAdapter {
       
       return {
         buf: btoa(binaryStr),
-        code: result.code,
         in_offset: result.in_offset
       };
-    }, [base64, isFirst, serializedOpts]) as { buf: string; code: number; in_offset: number };
+    }, [base64, isFirst, serializedOpts]) as { buf: string; in_offset: number };
     
     return {
       buf: Buffer.from(result.buf, 'base64'),
-      code: result.code,
       in_offset: result.in_offset
     };
   }

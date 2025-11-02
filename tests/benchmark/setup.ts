@@ -1,52 +1,35 @@
-import { mkdirSync, writeFileSync, existsSync, readFileSync, copyFileSync, readdirSync } from 'fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { compressFiles } from './util.js';
-import { build } from 'esbuild';
-import { minify } from 'terser';
+import { collectChainData } from './util.js';
+import * as zlib from 'node:zlib';
 
-const __dirname = import.meta.dirname || process.cwd();
-const dataDir = join(__dirname, '../data');
-const warmupDir = join(__dirname, '../edge-cases/golden-compression');
-const outputDir = join(__dirname, 'compressed');
-const outfile = join(__dirname, 'bench-min.js');
+const dir = join(import.meta.dirname || process.cwd(), 'compressed');
+const TARGET = 1000;
 
-if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-const dataFiles = readdirSync(dataDir).filter(f => !f.startsWith('.'));
-const needsCompression = !dataFiles.every((_, idx) => existsSync(join(outputDir, `test-${idx}.zst`)));
+const existing = readdirSync(dir).filter(f => f.match(/^data-\d+\.zst$/)).length;
 
-if (needsCompression) {
-  const testFiles = await compressFiles(dataDir, true);
-  testFiles.forEach((file, idx) => writeFileSync(join(outputDir, `test-${idx}.zst`), file.compressed));
-  writeFileSync(join(outputDir, 'metadata.json'), JSON.stringify({
-    fileSizes: testFiles.map(f => f.original.length),
-    levels: testFiles.map(f => f.level),
-    fileCount: testFiles.length,
-    totalOriginalSize: testFiles.reduce((sum, f) => sum + f.original.length, 0)
-  }));
+if (existing < TARGET) {
+  const data = await collectChainData(TARGET, existing);
+  console.log(`\nCompressing ${data.length} files...`);
+  data.forEach((buf, i) => {
+    writeFileSync(join(dir, `data-${existing + i}.zst`), buf);
+    if ((i + 1) % 100 === 0) process.stdout.write(`\r${i + 1}/${data.length}`);
+  });
+  console.log(`\nDone`);
 }
 
-const warmupFiles = await compressFiles(warmupDir, false);
-warmupFiles.forEach((file, idx) => writeFileSync(join(outputDir, `warmup-${idx}.zst`), file.compressed));
+console.log('Generating metadata...');
+const files = readdirSync(dir)
+  .filter(f => f.match(/^data-\d+\.zst$/))
+  .sort((a, b) => parseInt(a.match(/\d+/)?.[0] || '0') - parseInt(b.match(/\d+/)?.[0] || '0'));
 
-copyFileSync(join(__dirname, '../../packages/zstd-wasm-decoder/src/zstd-decoder.wasm'), join(__dirname, 'zstd-decoder.wasm'));
+const sizes = files.map(f => zlib.zstdDecompressSync(readFileSync(join(dir, f))).length);
 
-await build({
-  entryPoints: [join(__dirname, 'bench.ts')],
-  bundle: true,
-  platform: 'node',
-  target: 'node20',
-  format: 'esm',
-  outfile: outfile,
-  external: ['node:*', 'fs', 'path'],
-  minify: false
-});
-
-const minified = await minify(readFileSync(outfile, 'utf-8'), {
-  module: true,
-  compress: { passes: 2, unsafe: true, unsafe_math: true, unsafe_methods: true },
-  mangle: { toplevel: true }
-});
-
-writeFileSync(outfile, minified.code!);
+writeFileSync(join(dir, 'metadata.json'), JSON.stringify({
+  fileSizes: sizes,
+  fileCount: files.length,
+  totalOriginalSize: sizes.reduce((a, b) => a + b, 0)
+}));
 
