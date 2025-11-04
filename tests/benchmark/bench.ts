@@ -36,7 +36,7 @@ const decompressWithStream = async (buf: Buffer) => {
 };
 
 const warmup = async (buffers: Buffer[]) => {
-  for (let i = 0; i < 13; i++) {
+  for (let i = 0; i < 5; i++) {
     for (const buf of buffers) {
       zlib.zstdDecompressSync(buf);
       await new Promise((resolve, reject) => zlib.zstdDecompress(buf, (err, result) => err ? reject(err) : resolve(result)));

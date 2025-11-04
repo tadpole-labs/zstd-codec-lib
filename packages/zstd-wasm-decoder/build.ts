@@ -26,13 +26,11 @@ const PREP = process.argv.includes('--prep');
 
 if (!existsSync(WASM_SOURCE_PATH)) {
   console.error('WASM file not found at:', WASM_SOURCE_PATH);
-  console.error('Run `make` first to build the WASM module');
   process.exit(1);
 }
 
 if (!existsSync(WASM_PERF_PATH)) {
   console.error('Perf WASM file not found at:', WASM_PERF_PATH);
-  console.error('Run `make` first to build the WASM module');
   process.exit(1);
 }
 
@@ -57,9 +55,8 @@ const terserOptions = {
   mangle: {
     toplevel: true,
     safari10: false,
-    reserved: ['_decompressSync', 'isError', 'malloc'],
     properties: {
-      regex: /^_(?!decompressSync)/,
+      regex: /^_/,
       reserved: []
     }
   },
@@ -191,21 +188,48 @@ for (const config of configs) {
   }
 }
 /**
- * Pre-compress with deflate-raw (level 7) before encoding to base64.
+ * Pre-compress with deflate-raw using zopfli for maximum compression before encoding to base64.
  * 
  * Yields a smaller bundle size when compressed twice 
  * 
  * Opaque + decomp. via DecompressionStreams API
  * 
- * .wasm  =>  deflate-raw  =>  base64  =>  .js  => gzip/brotli/zstd
+ * .wasm  =>  zopfli deflate-raw  =>  base64  =>  .js  => gzip/brotli/zstd
  * 
  * Comparatively the cost of an additional network request
  * to shave off the extra bytes by splitting the .wasm and .js module
  * 
  * isn't worth it (for slim modules)
  */
-const wasmBase64 = deflateRawSync(readFileSync(WASM_SOURCE_PATH), { level: 7 }).toString('base64');
-const wasmPerfBase64 = deflateRawSync(readFileSync(WASM_PERF_PATH), { level: 7 }).toString('base64');
+
+function compressWithZopfli(inputPath: string): Buffer {
+  const tmpOutput = `${inputPath}.zopfli.tmp`;
+  console.log(`Compressing with zopfli (exhaustive): ${inputPath}`);
+  
+  try {
+    // Use zopfli with maximum iterations for best compression
+    // --deflate for raw deflate format (not gzip)
+    // --i1000 for 1000 iterations (exhaustive search)
+    execSync(`zopfli --deflate --i2000 "${inputPath}" -c > "${tmpOutput}"`, {
+      stdio: ['inherit', 'inherit', 'inherit']
+    });
+    
+    const compressed = readFileSync(tmpOutput);
+    execSync(`rm "${tmpOutput}"`);
+    
+    console.log(`  Original: ${readFileSync(inputPath).length.toLocaleString()} bytes`);
+    console.log(`  Compressed: ${compressed.length.toLocaleString()} bytes`);
+    console.log(`  Ratio: ${((compressed.length / readFileSync(inputPath).length) * 100).toFixed(2)}%\n`);
+    
+    return compressed;
+  } catch (error) {
+    console.warn('Zopfli compression failed, falling back to standard deflate');
+    return deflateRawSync(readFileSync(inputPath), { level: 9 });
+  }
+}
+
+const wasmBase64 = compressWithZopfli(WASM_SOURCE_PATH).toString('base64');
+const wasmPerfBase64 = compressWithZopfli(WASM_PERF_PATH).toString('base64');
 
 async function buildInlined(variant: 'size' | 'perf') {
   const base64 = variant === 'perf' ? wasmPerfBase64 : wasmBase64;
@@ -233,7 +257,7 @@ async function buildInlined(variant: 'size' | 'perf') {
     const minified = await minify(code, terserOptions);
     if (minified.code) {
       writeFileSync(join(ESM_DIR, `index.inlined${suffix}.min.js`), minified.code);
-      const gzipBytes = gzipSync(minified.code, { level: 6 }).length;
+      const gzipBytes = gzipSync(minified.code, { level: 9, memLevel: 9, windowBits: 15 }).length;
       console.log(`Built (minified): index.inlined${suffix}.min.js - ${gzipBytes.toLocaleString()} bytes (${(gzipBytes / 1024).toFixed(2)} KB) gzipped`);
     }
   }

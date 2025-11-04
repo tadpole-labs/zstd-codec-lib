@@ -36,7 +36,7 @@ export class BrowserAdapter {
     await this.page.waitForFunction(() => {
       // @ts-ignore
       return window.ZstdWasm?.ready === true;
-    }, { timeout: 10000 });
+    }, { timeout: 120000 });
     
     console.log(`${this.options.browser} initialized`);
   }

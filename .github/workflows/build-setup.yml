@@ -1,0 +1,142 @@
+name: Setup Build Dependencies
+
+on:
+  workflow_call:
+
+env:
+  # LLVM Configuration
+  LLVM_VERSION: "21.1.4"
+  LLVM_X64_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.4/LLVM-21.1.4-Linux-X64.tar.xz"
+  LLVM_X64_FILE: "LLVM-21.1.4-Linux-X64.tar.xz"
+  LLVM_X64_ATTESTATION: ".github/attestations/LLVM-21.1.4-Linux-X64.tar.xz.jsonl"
+  LLVM_ARM64_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.4/LLVM-21.1.4-Linux-ARM64.tar.xz"
+  LLVM_ARM64_FILE: "LLVM-21.1.4-Linux-ARM64.tar.xz"
+  LLVM_ARM64_ATTESTATION: ".github/attestations/LLVM-21.1.4-Linux-ARM64.tar.xz.jsonl"
+  
+  # Binaryen Configuration
+  BINARYEN_VERSION: "124"
+  BINARYEN_X64_URL: "https://github.com/WebAssembly/binaryen/releases/download/version_124/binaryen-version_124-x86_64-linux.tar.gz"
+  BINARYEN_X64_SHA256: "0290c3779fedf592b8da0ded3032ff55c41a2b7bfa2d6bf7b7bac6f0e6e28963"
+  BINARYEN_ARM64_URL: "https://github.com/WebAssembly/binaryen/releases/download/version_124/binaryen-version_124-aarch64-linux.tar.gz"
+  BINARYEN_ARM64_SHA256: "6291bd9a57d8e046f3bc099a4db386c147433a87f71c783a901c5b1792e38de3"
+  
+  # Zopfli Configuration
+  ZOPFLI_COMMIT: "ccf9f0588d4a4509cb1040310ec122243e670ee6"
+  ZOPFLI_REPO: "https://github.com/google/zopfli.git"
+
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          submodules: recursive
+
+      - name: Cache build dependencies
+        id: cache-deps
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/llvm-21
+            ~/binaryen
+            ~/zopfli
+          key: build-deps-llvm-${{ env.LLVM_VERSION }}-binaryen-${{ env.BINARYEN_VERSION }}-zopfli-${{ env.ZOPFLI_COMMIT }}-${{ runner.arch }}-${{ runner.os }}
+
+      - name: Setup build dependencies
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          set -e  # Exit immediately if any command fails
+          
+          ARCH=$(uname -m)
+          
+          # ===== LLVM Setup =====
+          echo "Setting up LLVM..."
+          if [ "$ARCH" = "x86_64" ]; then
+            LLVM_URL="${{ env.LLVM_X64_URL }}"
+            LLVM_FILE="${{ env.LLVM_X64_FILE }}"
+            ATTESTATION_FILE="${{ env.LLVM_X64_ATTESTATION }}"
+          elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+            LLVM_URL="${{ env.LLVM_ARM64_URL }}"
+            LLVM_FILE="${{ env.LLVM_ARM64_FILE }}"
+            ATTESTATION_FILE="${{ env.LLVM_ARM64_ATTESTATION }}"
+          else
+            echo "Unsupported architecture: $ARCH"
+            exit 1
+          fi
+          
+          echo "Downloading LLVM ${{ env.LLVM_VERSION }} for $ARCH..."
+          wget --progress=dot:giga "$LLVM_URL"
+          
+          echo "Verifying LLVM package integrity..."
+          if ! gh attestation verify --repo llvm/llvm-project "$LLVM_FILE" --bundle "$ATTESTATION_FILE"; then
+            echo "❌ ERROR: LLVM package attestation verification failed!"
+            echo "The downloaded package could not be verified against the official attestation."
+            rm -f "$LLVM_FILE"
+            exit 1
+          fi
+          echo "✓ LLVM package verification successful"
+          
+          echo "Extracting LLVM..."
+          mkdir -p ~/llvm-21
+          tar -xf "$LLVM_FILE" -C ~/llvm-21 --strip-components=1
+          rm "$LLVM_FILE"
+          
+          # ===== Binaryen Setup =====
+          echo "Setting up Binaryen..."
+          if [ "$ARCH" = "x86_64" ]; then
+            BINARYEN_URL="${{ env.BINARYEN_X64_URL }}"
+            BINARYEN_SHA256="${{ env.BINARYEN_X64_SHA256 }}"
+          elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+            BINARYEN_URL="${{ env.BINARYEN_ARM64_URL }}"
+            BINARYEN_SHA256="${{ env.BINARYEN_ARM64_SHA256 }}"
+          else
+            echo "Unsupported architecture for Binaryen: $ARCH"
+            exit 1
+          fi
+          
+          BINARYEN_FILE="binaryen.tar.gz"
+          echo "Downloading Binaryen version ${{ env.BINARYEN_VERSION }} for $ARCH..."
+          wget -O "$BINARYEN_FILE" "$BINARYEN_URL"
+          
+          echo "Verifying Binaryen SHA256 checksum..."
+          echo "${BINARYEN_SHA256}  ${BINARYEN_FILE}" | sha256sum -c -
+          echo "✓ Binaryen package verification successful"
+          
+          echo "Extracting Binaryen..."
+          mkdir -p ~/binaryen
+          tar -xzf "$BINARYEN_FILE" -C ~/binaryen --strip-components=1
+          rm "$BINARYEN_FILE"
+          
+          # ===== Zopfli Setup =====
+          echo "Setting up Zopfli..."
+          echo "Cloning Zopfli repository..."
+          git clone "${{ env.ZOPFLI_REPO }}" zopfli-build
+          cd zopfli-build
+          
+          echo "Checking out commit ${{ env.ZOPFLI_COMMIT }}..."
+          git checkout "${{ env.ZOPFLI_COMMIT }}"
+          
+          # Verify we're on the correct commit
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          if [ "$CURRENT_COMMIT" != "${{ env.ZOPFLI_COMMIT }}" ]; then
+            echo "❌ ERROR: Failed to checkout correct Zopfli commit"
+            echo "Expected: ${{ env.ZOPFLI_COMMIT }}"
+            echo "Got: $CURRENT_COMMIT"
+            exit 1
+          fi
+          echo "✓ Zopfli commit verification successful"
+          
+          echo "Building Zopfli..."
+          make
+          mkdir -p ~/zopfli/bin
+          cp zopfli ~/zopfli/bin/
+          cd ..
+          rm -rf zopfli-build
+          
+          echo "✓ All build dependencies installed successfully"
+          
+          # Quick sanity check that binaries exist
+          ls -la ~/llvm-21/bin/clang ~/binaryen/bin/wasm-opt ~/zopfli/bin/zopfli
+

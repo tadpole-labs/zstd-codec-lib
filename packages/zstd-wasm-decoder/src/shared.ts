@@ -1,18 +1,18 @@
 import ZstdDecoder from './zstd-wasm.js';
-import type { StreamResult, ZstdOptions } from './types.js';
-import { rzfh, DZstdState } from './utils.js';
+export { default as ZstdDecoder, _MAX_SRC_BUF } from './zstd-wasm.js';
 
-export { default as ZstdDecoder } from './zstd-wasm.js';
+
+import type { StreamResult, ZstdOptions } from './types.js';
+import { rzfh, DZS, err } from './utils.js';
 
 export const _internal = {
   _loader: null as ((wasmPath?: string) => WebAssembly.Module | Promise<WebAssembly.Module>) | null,
-  bufferSizes: { 
-    maxSrcSize: 64 * 1024 * 1024,    // 64MB
-    maxDstSize: 128 * 1024 * 1024    // 128MB
+  bufSizes: { 
+    maxSrcSize: 0,
+    maxDstSize: 0
   },
   dictionaries: [] as string[]
 };
-
 
 // This is horrible tbh.
 const decoderPools = new Map<number, Map<number, ZstdDecoder>>();
@@ -31,7 +31,7 @@ function /* @__PURE__ */ _createDecoderInstance(dictionary?: Uint8Array | ArrayB
                dictionary instanceof ArrayBuffer ? new Uint8Array(dictionary) :
                undefined;
   
-  const decoder = new ZstdDecoder({ ..._internal.bufferSizes, dictionary: dict });
+  const decoder = new ZstdDecoder({ ..._internal.bufSizes, dictionary: dict });
   decoder.init(cachedModule);
   return decoder;
 }
@@ -41,8 +41,8 @@ export const setupZstdDecoder = /* @__PURE__ */ async (options: {
   maxDstSize?: number;
   dictionaries?: string[];  // URLs or data:uris
 }) => {
-  if (options.maxSrcSize) _internal.bufferSizes.maxSrcSize = options.maxSrcSize;
-  if (options.maxDstSize) _internal.bufferSizes.maxDstSize = options.maxDstSize;
+  if (options.maxSrcSize) _internal.bufSizes.maxSrcSize = options.maxSrcSize;
+  if (options.maxDstSize) _internal.bufSizes.maxDstSize = options.maxDstSize;
   
   if (options.dictionaries) {
     for (const url of options.dictionaries) {
@@ -144,8 +144,7 @@ const _getDictId = /* @__PURE__ */ (input: Uint8Array): number => {
  */
 export const createDecoder = /* @__PURE__ */ async (options: ZstdOptions = {}): Promise<ZstdDecoder> => {
   if (!isInitialized) {
-    const module = _internal._loader!(options.wasmPath);
-    cachedModule = module instanceof Promise ? await module : module;
+    cachedModule = await _internal._loader!(options.wasmPath);
     isInitialized = true;
   }
   return _createDecoderInstance(options.dictionary);
@@ -176,7 +175,7 @@ export class ZstdDecompressionStream {
     let isFirstChunk = true;
     // A temporary buffer to hold data until the header can be read.
     let initialBuffer: Uint8Array[] = [];
-    let headerInfo: DZstdState = { d: 0, u: 0, e: -1 };
+    let headerInfo: DZS = { d: 0, u: 0, e: -1 };
     let bytesRead: number = 0
     let bytesWritten: number = 0
     let bufLen: number = 0
@@ -197,7 +196,7 @@ export class ZstdDecompressionStream {
             headerBuffer.set(initialBuffer[i], offset);
             offset += initialBuffer[i].length;
           }
-          headerInfo = rzfh(headerBuffer) as DZstdState;
+          headerInfo = rzfh(headerBuffer) as DZS;
           minRecvSize = Math.max(minRecvSize, headerInfo.e, Math.max(headerInfo.u>>4, 1<<17))
         }
         if(bytesRead < minRecvSize || headerInfo.e == -1 ) return;
@@ -210,7 +209,6 @@ export class ZstdDecompressionStream {
           return;
         }
         
-
         try {
           if (isFirstChunk) {
             dictId = _getDictId(data);
@@ -221,8 +219,8 @@ export class ZstdDecompressionStream {
           bytesWritten += result.length
           controller.enqueue(result);
           isFirstChunk = false;
-        } catch (error) {
-          controller.error(new Error(`Decompression error: ${error}`));
+        } catch (er) {
+          controller.error(new err(`decomp err ${er}`));
         }
       },
 
@@ -231,8 +229,8 @@ export class ZstdDecompressionStream {
           try {
             const res = await decompressStream(_concatUint8Arrays(initialBuffer, bytesRead), true, options);
             controller.enqueue(res.buf);
-          } catch (err) {
-            controller.error(new Error(`Decompression error: ${err}`));
+          } catch (er) {
+            controller.error(new err(`decomp err ${er}`));
           }
         } else {
           if(idx == -1) {

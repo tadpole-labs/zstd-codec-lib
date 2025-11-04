@@ -1,9 +1,9 @@
 import ZstdDecoder from './zstd-wasm.js';
+export { default as ZstdDecoder, _MAX_SRC_BUF } from './zstd-wasm.js';
 import type { StreamResult, ZstdOptions } from './types.js';
-export { default as ZstdDecoder } from './zstd-wasm.js';
 export declare const _internal: {
     _loader: ((wasmPath?: string) => WebAssembly.Module | Promise<WebAssembly.Module>) | null;
-    bufferSizes: {
+    bufSizes: {
         maxSrcSize: number;
         maxDstSize: number;
     };
@@ -29,12 +29,12 @@ export declare class ZstdDecompressionStream {
     constructor(options?: ZstdOptions);
 }
 /**
- * Decompress data completely
+ * Decompress data in-full
  * (Proxies to decompressStream and returns the buf)
  */
 export declare const decompress: (input: Uint8Array, options?: ZstdOptions) => Promise<Uint8Array>;
 /**
- * Decompress data as a stream (for chunked processing)
+ * Decompress data as a stream
  */
 export declare const decompressStream: (input: Uint8Array, reset?: boolean, options?: ZstdOptions) => Promise<StreamResult>;
 /**

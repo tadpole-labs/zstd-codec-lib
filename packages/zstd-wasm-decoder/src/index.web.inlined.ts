@@ -18,19 +18,14 @@ export {
 
 export type { DecoderOptions, StreamResult } from './types.js';
 
-const WASM_BASE64 = '__WASM_BASE64_PLACEHOLDER__';
-
-const b64atob = (b64: string) => new TextEncoder().encode(atob(b64)).buffer;
-
 _internal._loader = async () => {
-  const wasmData = typeof (Uint8Array as any).fromBase64 === 'function'
-    ? (Uint8Array as any).fromBase64(WASM_BASE64)
-    : b64atob(WASM_BASE64);
-  
-  const binary = await new Response(
-    new Blob([wasmData])
+
+  return await WebAssembly.compile(await new Response(
+    new Blob([typeof (Uint8Array as any).fromBase64 === 'function'
+      ? (Uint8Array as any).fromBase64(WASM_BASE64)
+      : new TextEncoder().encode(atob(WASM_BASE64)).buffer])
       .stream()
       .pipeThrough(new DecompressionStream('deflate-raw'))
-  ).arrayBuffer();
-  return await WebAssembly.compile(binary);
+  ).arrayBuffer());
 };
+const WASM_BASE64 = '__WASM_BASE64_PLACEHOLDER__';

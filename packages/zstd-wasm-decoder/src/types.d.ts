@@ -6,8 +6,7 @@ export interface BaseWasmExports {
   memory: WebAssembly.Memory;
   
   /** Allocate memory in the WASM module */
-  bmalloc(size: number): number;
-  
+  malloc(size: number): number;
   /** Prune the buffer to a new size */
   prune_buf(new_size: number): void;
 }
@@ -18,7 +17,7 @@ export interface BaseWasmExports {
 export interface DecoderWasmExports extends BaseWasmExports {
   /** Creates a ZSTD decompression context */
   createDCtx(): void;
-  
+
   /** Creates a ZSTD dictionary for decompression */
   createDict(dictPtr: number, dictSize: number): number;
   
@@ -32,10 +31,7 @@ export interface DecoderWasmExports extends BaseWasmExports {
   ): number;
   
   /** Decompresses a stream of data */
-  decStream(
-    outputPtr: number,
-    inputPtr: number
-  ): number;
+  decStream(): number;
   
   /** Resets the decompression context */
   reset(): number;
@@ -51,11 +47,11 @@ export interface DecoderOptions {
   /** Dictionary to use for decompression */
   dictionary?: Uint8Array;
   
-  /** Maximum source (compressed) buffer size in bytes */
-  maxSrcSize?: number;
+  /** Maximum (compressed) buffer size in bytes */
+  maxSrcSize?: number = 0;
   
-  /** Maximum destination (decompressed) buffer size in bytes */
-  maxDstSize?: number;
+  /** Maximum (decompressed) buffer size in bytes */
+  maxDstSize?: number = 0;
 }
 
 /**
@@ -95,7 +91,7 @@ export declare class ZstdDecoder {
    * Initializes the decoder WebAssembly module.
    * 
    * @param wasmModule - Compiled WebAssembly module
-   * @returns Promise that resolves to the initialized decoder
+   * @returns Returns the initialized decoder
    */
   init(wasmModule: WebAssembly.Module): Promise<ZstdDecoder>;
   

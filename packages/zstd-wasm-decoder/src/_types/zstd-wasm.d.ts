@@ -1,4 +1,5 @@
 import type { DecoderOptions, StreamResult } from './types.js';
+export declare const _MAX_SRC_BUF: number;
 declare class ZstdDecoder {
     private _wasm;
     private _exports;

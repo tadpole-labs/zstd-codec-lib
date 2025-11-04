@@ -13,25 +13,20 @@ ifeq ($(LLVM_DIR),)
     else ifneq ($(wildcard /usr/bin/clang),)
         LLVM_DIR := /usr
     else
-        $(error LLVM_DIR not set and clang not found. Please set LLVM_DIR environment variable)
+        $(error LLVM_DIR not set and clang not found)
     endif
 endif
 
 CLANG = $(LLVM_DIR)/bin/clang
 
-EXPORTS = bmalloc prune_buf \
-          createDCtx \
-          createDict decompressSync \
-          decStream \
-          reset refDict
-
+EXPORTS = malloc prune_buf createDCtx A createDict decompressSync decStream reset refDict get_dctx_ptr get_dctx_struct
 BIN_DIR = bin
-SOURCES = $(BIN_DIR)/minimal_libc.c $(BIN_DIR)/zstd_wasm.c $(BIN_DIR)/zstddeclib.c
+AMALGAMATED_SOURCE = $(BIN_DIR)/zstd_wasm_amalgamated.c
 OUTPUT_DIR = build
 OUTPUT = $(OUTPUT_DIR)/zstd.wasm
 OUTPUT_PERF = $(OUTPUT_DIR)/zstd-perf.wasm
 
-CFLAGS = --target=wasm32-unknown-unknown
+CFLAGS = --target=wasm32
 
 # 8kb stack sufficient for a lightweight decoder only zstd build
 CFLAGS += -z stack-size=8192
@@ -81,6 +76,8 @@ CFLAGS += -DHAVE_ZLIB=0
 CFLAGS += -DHAVE_LZMA=0
 CFLAGS += -DHAVE_LZ4=0
 CFLAGS += -DZSTD_LEGACY_SUPPORT=0
+CFLAGS += -DZSTD_DISABLE_ASM
+CFLAGS += -DZSTD_ENABLE_ASM_X86_64_BMI2=0
 
 CFLAGS += -Wall -Wextra -Wcast-qual -Wcast-align -Wshadow
 CFLAGS += -Wstrict-aliasing=1 -Wstrict-prototypes -Wundef
@@ -93,52 +90,46 @@ CFLAGS += -DZSTD_STATIC_LINKING_ONLY
 CFLAGS += -DZSTD_LIB_DICTBUILDER=0
 CFLAGS += -DZSTD_LIB_COMPRESSION=0
 CFLAGS += -DZSTD_LIB_DEPRECATED=0
+CFLAGS += -fwrapv-pointer
 
-CFLAGS_PERF += -mllvm -polly
-CFLAGS_PERF += -mllvm -polly-position=before-vectorizer
-CFLAGS_PERF += -mllvm -polly-vectorizer=stripmine
-CFLAGS_PERF += -fvectorize
-CFLAGS_PERF += -fslp-vectorize
+CFLAGS += -mllvm -polly
+CFLAGS += -mllvm -polly-position=before-vectorizer
+CFLAGS += -mllvm -polly-vectorizer=stripmine
+CFLAGS += -fvectorize
+CFLAGS += -fslp-vectorize
+CFLAGS_SIZE = -DZSTD_NO_INLINE
+# Size-optimized build flags
+CFLAGS_SIZE += $(CFLAGS) -Oz
 
-CFLAGS_BASE += -fno-math-errno
-CFLAGS_BASE += -fmerge-all-constants
-CFLAGS_BASE += -fno-strict-aliasing
-
-# Size-optimized build flags (zstd.wasm)
-# -Oz yields the smallest binary at the cost of a 30%-40% perf hit
-CFLAGS_SIZE = $(CFLAGS)
-CFLAGS_SIZE += -Oz
-CFLAGS_SIZE += -DZSTD_LIB_MINIFY
-CFLAGS_SIZE += -DZSTD_NO_INLINE
-
-# Performance-optimized build flags (zstd-perf.wasm)
-# -Os yields the highest performance
-CFLAGS_PERF = $(CFLAGS)
-CFLAGS_PERF += -Os
+# Performance-optimized build flags
+CFLAGS_PERF = $(CFLAGS) -Os
 
 # createCCtx is the entry
 LDFLAGS = -Wl,--no-entry
 LDFLAGS += -Wl,--allow-undefined
 LDFLAGS += -Wl,--strip-all
-# LDFLAGS += -Wl,--initial-heap=65536 // already the default
-# LDFLAGS += -Wl,--no-growable-memory // it never grows anyway. Toggling this adds useless opcodes
+LDFLAGS += -Wl,--threads=1
+LDFLAGS += -Wl,--initial-heap=16580608
+LDFLAGS += -Wl,--initial-memory=16777216
+LDFLAGS += -Wl,--no-growable-memory
 LDFLAGS += $(foreach fn,$(EXPORTS),-Wl,--export=$(fn))
-LDFLAGS += -Wl,--lto-O3 -Wl,--lto-CGO3
+LDFLAGS += -Wl,--lto-O3
+LDFLAGS += -Wl,--lto-CGO3
 LDFLAGS += -Wl,--gc-sections
+LDFLAGS += -Wl,--compress-relocations
 
 # Safer layout
 # https://bugs.llvm.org/show_bug.cgi?id=37181
 # https://github.com/rustwasm/team/issues/81#issue-303617986
 LDFLAGS += -Wl,--stack-first
+LDFLAGS += -Wl,--global-base=0
+LDFLAGS += -Wl,--merge-data-segments
+LDFLAGS += -Wl,--print-map
 
-# WASM-opt flags
-# --- Flags before optimization level (before -Oz/-Os) ---
-WASM_OPT_FLAGS_PRE = \
-	--untee \
-	--converge
+# wasm-opt flags
+WASM_OPT_FLAGS_PRE = --untee --converge
 
-# --- Code size reduction flags (come after -Oz/-Os) ---
-WASM_OPT_FLAGS_SIZE_COMMON = \
+WASM_OPT_FLAGS_COMMON = \
 	--enable-simd \
 	--enable-relaxed-simd \
 	--enable-extended-const \
@@ -154,17 +145,13 @@ WASM_OPT_FLAGS_SIZE_COMMON = \
 	--dce \
 	--vacuum \
 	--coalesce-locals-learning \
-	--low-memory-unused
-
-# --- Performance-related flags ---
-WASM_OPT_FLAGS_PERF = \
+	--low-memory-unused \
 	--enable-bulk-memory \
 	--enable-bulk-memory-opt \
 	--ignore-implicit-traps \
-	--closed-world 
+	--closed-world
 
-# --- Reduces code size but hurts perf ---
-WASM_OPT_FLAGS_OTHER = \
+WASM_OPT_FLAGS_EXTRA = \
 	--optimize-instructions \
 	--optimize-added-constants \
 	--optimize-added-constants-propagate \
@@ -176,117 +163,62 @@ WASM_OPT_FLAGS_OTHER = \
 	--gufa-cast-all \
 	--gufa-optimizing
 
-# Size-optimized wasm-opt flags (zstd.wasm): -Oz at correct position + size flags only
-WASM_OPT_FLAGS_SIZE_BUILD = $(WASM_OPT_FLAGS_PRE) -Oz $(WASM_OPT_FLAGS_SIZE_COMMON) $(WASM_OPT_FLAGS_PERF) $(WASM_OPT_FLAGS_OTHER)
+WASM_OPT_FLAGS_SIZE = $(WASM_OPT_FLAGS_PRE) -Oz -Oz $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA)
+WASM_OPT_FLAGS_PERF = $(WASM_OPT_FLAGS_PRE) -Os $(WASM_OPT_FLAGS_COMMON)
 
-# Performance-optimized wasm-opt flags (zstd-perf.wasm): -Os at correct position + all flags
-WASM_OPT_FLAGS_PERF_BUILD = $(WASM_OPT_FLAGS_PRE) -Os $(WASM_OPT_FLAGS_SIZE_COMMON) $(WASM_OPT_FLAGS_PERF) 
-
-.PHONY: all clean check-tools test tests regenerate-decoder help size perf
+.PHONY: all clean check-tools test tests regenerate-amalgamated help size perf
 
 all: check-tools size perf
-	@echo "Running TypeScript build..."
 	@if command -v bun >/dev/null 2>&1; then \
 		bun build.ts; \
 	else \
-		echo "Error: bun not found."; \
+		echo "Error: bun not found"; \
 		exit 1; \
 	fi
 
-size: check-tools $(OUTPUT)
+size: check-tools regenerate-amalgamated $(OUTPUT_DIR)
+	@echo "Building size-optimized WASM..."
+	@$(CLANG) $(CFLAGS_SIZE) $(LDFLAGS) $(AMALGAMATED_SOURCE) -o $(OUTPUT)
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		echo "Applying wasm-opt post-processing (size-optimized)..."; \
-		wasm-opt $(WASM_OPT_FLAGS_SIZE_BUILD) $(OUTPUT) -o $(OUTPUT); \
-		echo "Size-optimized build complete:"; \
-		ls -lh $(OUTPUT); \
-	else \
-		echo "Warning: wasm-opt not found. Install binaryen:"; \
-		echo "  MacOS:  brew install binaryen"; \
-		echo "  Linux:  sudo apt-get install binaryen"; \
-		echo "Build complete without wasm-opt:"; \
-		ls -lh $(OUTPUT); \
+		wasm-opt $(WASM_OPT_FLAGS_SIZE) $(OUTPUT) -o $(OUTPUT); \
 	fi
+	@echo "Build complete: $(OUTPUT)"
+	@ls -lh $(OUTPUT)
 
-perf: check-tools $(OUTPUT_PERF)
+perf: check-tools regenerate-amalgamated $(OUTPUT_DIR)
+	@echo "Building performance-optimized WASM..."
+	@$(CLANG) $(CFLAGS_PERF) $(LDFLAGS) $(AMALGAMATED_SOURCE) -o $(OUTPUT_PERF)
 	@if command -v wasm-opt >/dev/null 2>&1; then \
-		echo "Applying wasm-opt post-processing (performance-optimized)..."; \
-		wasm-opt $(WASM_OPT_FLAGS_PERF_BUILD) $(OUTPUT_PERF) -o $(OUTPUT_PERF); \
-		echo "Perf. opt build complete:"; \
-		ls -lh $(OUTPUT_PERF); \
-	else \
-		echo "Warning: wasm-opt not found. Install binaryen:"; \
-		echo "  MacOS:  brew install binaryen"; \
-		echo "  Linux:  sudo apt-get install binaryen"; \
-		echo "Build complete without wasm-opt:"; \
-		ls -lh $(OUTPUT_PERF); \
+		wasm-opt $(WASM_OPT_FLAGS_PERF) $(OUTPUT_PERF) -o $(OUTPUT_PERF); \
 	fi
+	@echo "Build complete: $(OUTPUT_PERF)"
+	@ls -lh $(OUTPUT_PERF)
 
 clean:
 	rm -rf $(OUTPUT_DIR)
 
-# Run test suite
 test tests: all
-	@echo "Running test suite..."
 	@cd ../.. && npm run test
 
-# Convenience target to regenerate zstddeclib.c
-regenerate-decoder:
-	@echo "Regenerating zstddeclib.c .."
-	@cd ../../vendor/zstd/build/single_file_libs && ./create_single_file_decoder.sh
-	@mv ../../vendor/zstd/build/single_file_libs/zstddeclib.c $(BIN_DIR)/zstddeclib.c
-	@echo "Successfully regenerated $(BIN_DIR)/zstddeclib.c"
+regenerate-amalgamated:
+	@cd $(BIN_DIR) && ./create_amalgamated_wasm.sh
 
 help:
-	@echo "Zstd Wasm Decoder Makefile"
+	@echo "Zstd WASM Decoder Makefile"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all (default)           - Build both size and perf optimized WASM + run TypeScript build"
-	@echo "  size                    - Build size-optimized WASM (zstd.wasm)"
-	@echo "  perf                    - Build performance-optimized WASM (zstd-perf.wasm)"
-	@echo "  clean                   - Remove build artifacts"
-	@echo "  test/tests              - Run test suite (via npm)"
-	@echo "  regenerate-decoder      - Regenerate zstddeclib.c from sources"
-	@echo "  check-tools             - Check if required tools are available"
-	@echo "  help                    - Show this help message"
-	@echo ""
-	@echo "Configuration:"
-	@echo "  LLVM_DIR=$(LLVM_DIR)"
-	@echo "  CLANG=$(CLANG)"
-	@echo ""
-	@echo "Note: Set LLVM_DIR environment variable to override auto-detection"
-	@echo "Note: Requires bun to be installed for TypeScript build"
-	@echo ""
-	@echo "Output:"
-	@echo "  build/zstd.wasm       - Size-optimized (-Oz, MINIFY, NO_INLINE)"
-	@echo "  build/zstd-perf.wasm  - Performance-optimized (-Os)"
+	@echo "  all (default)  - Build size and perf optimized WASM + TypeScript build"
+	@echo "  size           - Build size-optimized WASM (zstd.wasm, -Oz)"
+	@echo "  perf           - Build performance-optimized WASM (zstd-perf.wasm, -Os)"
+	@echo "  clean          - Remove build artifacts"
+	@echo "  test/tests     - Run test suite"
+	@echo "  help           - Show this help"
 
 check-tools:
-	@echo "Checking for required tools..."
 	@if [ ! -f "$(CLANG)" ]; then \
 		echo "Error: clang not found at $(CLANG)"; \
-		echo "Please install LLVM with WebAssembly target support:"; \
-		echo "  MacOS:  brew install llvm"; \
-		echo "  Linux:  sudo apt-get install clang lld"; \
-		echo "  Arch:   sudo pacman -S clang lld"; \
-		echo "Then set LLVM_DIR environment variable if needed"; \
 		exit 1; \
 	fi
-	@if ! $(CLANG) --version 2>&1 | grep -q "Target:.*wasm" && ! $(CLANG) --print-targets 2>&1 | grep -q wasm; then \
-		echo "Warning: LLVM installation may not support WebAssembly target"; \
-	fi
-	@echo "All required tools are available."
 
 $(OUTPUT_DIR):
 	mkdir -p $(OUTPUT_DIR)
-
-$(OUTPUT): $(SOURCES) | $(OUTPUT_DIR)
-	@echo "Building size-optimized WASM module..."
-	$(CLANG) $(CFLAGS_SIZE) $(LDFLAGS) $(SOURCES) -o $@
-	@echo "Build complete: $@"
-	@ls -lh $@
-
-$(OUTPUT_PERF): $(SOURCES) | $(OUTPUT_DIR)
-	@echo "Building perf. opt WASM module..."
-	$(CLANG) $(CFLAGS_PERF) $(LDFLAGS) $(SOURCES) -o $@
-	@echo "Build complete: $@"
-	@ls -lh $@

@@ -19,7 +19,7 @@ _internal._loader = async () => {
   const instance = new WebAssembly.Instance(wasmModule, { env: {} });
   
   if (!initialized) {
-    const decoder = new ZstdDecoder(_internal.bufferSizes);
+    const decoder = new ZstdDecoder(_internal.bufSizes);
     decoder._initWithInstance(instance, wasmModule);
     _pushToPool(decoder, wasmModule, 0);
     initialized = true;

@@ -1,24 +1,27 @@
-
-
-
-
+/**
+ * Base WebAssembly exports.
+ */
 export interface BaseWasmExports {
+  /** WebAssembly linear memory */
   memory: WebAssembly.Memory;
-  bmalloc(size: number): number;
+  
+  /** Allocate memory in the WASM module */
+  malloc(size: number): number;
+  /** Prune the buffer to a new size */
   prune_buf(new_size: number): void;
 }
 
 /**
- * WebAssembly exported functions from the ZSTD decoder module
+ * Decoder specific exported functions.
  */
 export interface DecoderWasmExports extends BaseWasmExports {
-  /** Create a ZSTD decompression context */
+  /** Creates a ZSTD decompression context */
   createDCtx(): void;
-  
-  /** Create a ZSTD dictionary for decompression */
+
+  /** Creates a ZSTD dictionary for decompression */
   createDict(dictPtr: number, dictSize: number): number;
   
-  /** Decompress data using a dictionary (dctx is static in WASM) */
+  /** Decompresses data synchronously */
   decompressSync(
     dstPtr: number,
     dstCapacity: number,
@@ -27,93 +30,91 @@ export interface DecoderWasmExports extends BaseWasmExports {
     ddict: number
   ): number;
   
-  /** Decompress a stream of data (dctx is static in WASM) */
-  decStream(
-    outputPtr: number,
-    inputPtr: number
-  ): number;
+  /** Decompresses a stream of data */
+  decStream(): number;
   
-  /** Reset decompression context (uses static dctx in WASM) */
+  /** Resets the decompression context */
   reset(): number;
   
-  /** Reference a dictionary in the decompression context (uses static dctx in WASM) */
+  /** References a dictionary in the decompression context */
   refDict(ddict: number): number;
 }
 
 /**
- * Configuration options for the ZSTD decoder
+ * Configuration options for the ZSTD decoder.
  */
 export interface DecoderOptions {
-  /** Optional dictionary for decompression */
+  /** Dictionary to use for decompression */
   dictionary?: Uint8Array;
   
-  /** Maximum source (compressed) buffer size in bytes */
-  maxSrcSize?: number;
+  /** Maximum (compressed) buffer size in bytes */
+  maxSrcSize?: number = 0;
   
-  /** Maximum destination (decompressed) buffer size in bytes */
-  maxDstSize?: number;
+  /** Maximum (decompressed) buffer size in bytes */
+  maxDstSize?: number = 0;
 }
 
 /**
- * Options for decoder functions and streams
+ * Options for decoder functions and streams.
  */
 export interface ZstdOptions {
-  /** Optional dictionary for decompression */
+  /** Dictionary to use for decompression */
   dictionary?: Uint8Array | ArrayBuffer | Request | string;
   
-  /** Optional path to WASM module */
+  /** Path to the WASM module */
   wasmPath?: string;
 }
 
 /**
- * Result from a streaming decompression operation
+ * Result from a streaming decompression operation.
  */
 export interface StreamResult {
   /** Decompressed output buffer */
   buf: Uint8Array;
-  
-  /** Return code from ZSTD (0 = success, negative = error, positive = bytes remaining) */
-  code: number;
   
   /** Offset into the input buffer indicating how much was consumed */
   in_offset: number;
 }
 
 /**
- * Decoder class for decompressing ZSTD-compressed data
+ * Decoder class for decompressing ZSTD-compressed data.
  */
 export declare class ZstdDecoder {
   /**
-   * Create a new ZSTD decoder
-   * @param options - Optional decoder configuration
+   * Creates a new ZSTD decoder instance.
+   * 
+   * @param options - Decoder configuration options
    */
   constructor(options?: DecoderOptions);
   
   /**
-   * Initialize the decoder with a WebAssembly module
+   * Initializes the decoder WebAssembly module.
+   * 
    * @param wasmModule - Compiled WebAssembly module
-   * @returns Promise that resolves to the initialized decoder
+   * @returns Returns the initialized decoder
    */
   init(wasmModule: WebAssembly.Module): Promise<ZstdDecoder>;
   
   /**
-   * Decompress data synchronously
+   * Decompresses data synchronously.
+   * 
    * @param compressedData - ZSTD compressed data
-   * @param expectedSize - Optional hinted size of decompressed data
-   * @returns Decompressed data as Uint8Array
+   * @param expectedSize - Expected size of the decompressed data
+   * @returns Decompressed data
    */
   decompressSync(compressedData: Uint8Array, expectedSize?: number): Uint8Array;
   
   /**
-   * Decompress data using streaming API
+   * Decompresses data using the streaming API.
+   * 
    * @param input - Chunk of compressed data
    * @param reset - Whether to reset the decompression context
-   * @returns Stream result with decompressed buffer and metadata
+   * @returns Stream result with decompressed buffer and offset metadata
    */
   decompressStream(input: Uint8Array, reset?: boolean): StreamResult;
   
   /**
-   * Clean up decoder resources
+   * Cleans up decoder resources.
    */
   destroy(): void;
 }
