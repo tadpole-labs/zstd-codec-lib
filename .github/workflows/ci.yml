@@ -1,8 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build-setup:
@@ -38,6 +37,9 @@ jobs:
           sudo ln -sf $HOME/llvm-21/bin/clang /usr/local/bin/clang
           sudo ln -sf $HOME/llvm-21/bin/clang++ /usr/local/bin/clang++
           sudo ln -sf $HOME/llvm-21/bin/lld /usr/local/bin/lld
+          
+          # Export PATH for current shell session
+          export PATH="$HOME/llvm-21/bin:$HOME/binaryen/bin:$HOME/zopfli/bin:$PATH"
           
           # Verify installations
           echo "=== Build Tools Versions ==="
