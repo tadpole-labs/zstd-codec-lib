@@ -17,7 +17,6 @@ const ROOT_DIR = join(PKG_DIR, '..', '..');
 const LICENSE_PATH = join(ROOT_DIR, 'LICENSE');
 const README_PATH = join(ROOT_DIR, 'README.md');
 
-// Check for --prep flag
 const PREP = process.argv.includes('--prep');
 
 [ESM_DIR, TYPES_DIR].forEach(dir => {
@@ -34,10 +33,8 @@ if (!existsSync(WASM_PERF_PATH)) {
   process.exit(1);
 }
 
-const wasmStats = Bun.file(WASM_SOURCE_PATH);
-const wasmPerfStats = Bun.file(WASM_PERF_PATH);
-console.log(`WASM size-optimized: ${(await wasmStats.size).toLocaleString()} bytes`);
-console.log(`WASM perf-optimized: ${(await wasmPerfStats.size).toLocaleString()} bytes\n`);
+console.log(`WASM size-optimized: ${(Bun.file(WASM_SOURCE_PATH).size).toLocaleString()} bytes`);
+console.log(`WASM perf-optimized: ${(Bun.file(WASM_PERF_PATH).size).toLocaleString()} bytes\n`);
 
 const terserOptions = {
   ecma: 2020 as const,
@@ -55,9 +52,10 @@ const terserOptions = {
   mangle: {
     toplevel: true,
     safari10: false,
+    reserved: ['_initialize'],
     properties: {
-      regex: /^_/,
-      reserved: []
+      regex: /^_(?!initialize)/,
+      reserved: ['_initialize']
     }
   },
   compress: {
@@ -207,10 +205,9 @@ function compressWithZopfli(inputPath: string): Buffer {
   console.log(`Compressing with zopfli (exhaustive): ${inputPath}`);
   
   try {
-    // Use zopfli with maximum iterations for best compression
-    // --deflate for raw deflate format (not gzip)
-    // --i1000 for 1000 iterations (exhaustive search)
-    execSync(`zopfli --deflate --i2000 "${inputPath}" -c > "${tmpOutput}"`, {
+    // Below 2k iter zopfli iter we are not sufficiently using all of zopflis power
+    // Above 2k iter it compresses too hard that the wrapping compression is degraded
+    execSync(`zopfli --deflate --i20 "${inputPath}" -c > "${tmpOutput}"`, {
       stdio: ['inherit', 'inherit', 'inherit']
     });
     

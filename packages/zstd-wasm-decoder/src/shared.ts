@@ -17,10 +17,12 @@ export const _internal = {
 // This is horrible tbh.
 const decoderPools = new Map<number, Map<number, ZstdDecoder>>();
 const poolLocks = new Map<number, boolean[]>();
+
 // Survives hundreds of concurrent promises though without screwing browser mem
 // Something that shouldn't normally occur assuming common sense. Still good to know it survies misuse
-// Spinning up instances is cheap, but still not too cheap. So this is the middle ground. Without overengineering with web workers, another GC layer in JS etc. Prolly could get away with just one hot instance. And get rid of the above too
-
+// Spinning up instances is cheap, but still not too cheap.
+// So this is the middle ground. Without overengineering with web workers, another GC layer in JS etc.
+// Prolly could get away with just one hot instance. And get rid of the above too.
 let isInitialized = false;
 let cachedModule: WebAssembly.Module;
 
@@ -54,7 +56,7 @@ export const setupZstdDecoder = /* @__PURE__ */ async (options: {
 };
 
 export function _concatUint8Arrays(arrays: Uint8Array[], ol: number): Uint8Array {
-  if (arrays.length === 1) return arrays[0];
+  if (arrays.length == 1) return arrays[0];
   const buf = new Uint8Array(ol);
   for (let i = 0, b = 0; i < arrays.length; ++i) {
     const chk = arrays[i];
@@ -79,17 +81,16 @@ async function _acquireDecoder(dictId: number = 0, options?: ZstdOptions): Promi
   const locks = poolLocks.get(dictId)!;
   
   // 
-  for (let i = 0; i < locks.length; i++) {
+  for (let i = 0; i < locks.length; ++i) {
     if (!locks[i]) {
       locks[i] = true;
       return [pool.get(i)!, i, dictId];
     }
   }
+
+  const decoder = _createDecoderInstance(dictId > 0 ? (options?.dictionary || loadedDictionaries.get(dictId)) : undefined);
   
-  const dictionary = options?.dictionary || loadedDictionaries.get(dictId);
-  const decoder = _createDecoderInstance(dictId > 0 ? dictionary : undefined);
-  
-  if (locks.length >= 2) return [decoder, -1, dictId];
+  if (locks.length > 1) return [decoder, -1, dictId];
   
   const newIdx = locks.length;
   pool.set(newIdx, decoder);
@@ -131,7 +132,7 @@ const _getDictId = /* @__PURE__ */ (input: Uint8Array): number => {
   if (input.length < 6) return 0;
   try {
     const header = rzfh(input);
-    const id = typeof header === 'object' ? header.d : 0;
+    const id = typeof header == 'object' ? header.d : 0;
     if (id > 0) loadedDictionaries.set(id, input);
     return id;
   } catch {
@@ -163,6 +164,9 @@ const _toUint8Array = (chunk: BufferSource): Uint8Array => {
 
 /**
  * ZstdDecompressionStream
+ * 
+ * Use this, when the input that is being fed in, is not available at invocation time.
+ * e.g. when performing network requests where incoming data is buffered over time.
  */
 export class ZstdDecompressionStream {
   readonly readable: ReadableStream;
@@ -186,13 +190,13 @@ export class ZstdDecompressionStream {
         const data = _toUint8Array(chunk)
         bytesRead += data.length
         initialBuffer.push(data)
-        bufLen++
+        ++bufLen;
         if(bytesRead < 12) {
           return;
         } else if(headerInfo.e == -1) {
           const headerBuffer = new Uint8Array(bytesRead);
           let offset = 0;
-          for (let i = 0; i < bufLen; i++) {
+          for (let i = 0; i < bufLen; ++i) {
             headerBuffer.set(initialBuffer[i], offset);
             offset += initialBuffer[i].length;
           }
@@ -220,7 +224,7 @@ export class ZstdDecompressionStream {
           controller.enqueue(result);
           isFirstChunk = false;
         } catch (er) {
-          controller.error(new err(`decomp err ${er}`));
+          controller.error(new err(`dec err ${er}`));
         }
       },
 
@@ -230,7 +234,7 @@ export class ZstdDecompressionStream {
             const res = await decompressStream(_concatUint8Arrays(initialBuffer, bytesRead), true, options);
             controller.enqueue(res.buf);
           } catch (er) {
-            controller.error(new err(`decomp err ${er}`));
+            controller.error(new err(`dec err ${er}`));
           }
         } else {
           if(idx == -1) {
@@ -249,7 +253,7 @@ export class ZstdDecompressionStream {
 }
 
 /**
- * Decompress data in-full
+ * Convinience wrapper for drop-in replacement of other libraries.
  * (Proxies to decompressStream and returns the buf)
  */
 export const decompress = /* @__PURE__ */ async (
@@ -260,7 +264,14 @@ export const decompress = /* @__PURE__ */ async (
 };
 
 /**
- * Decompress data as a stream
+ * Decompress stream for data larger than what fits into statically allocated in and out buffers.
+ * 
+ * Use this function when the entire input is already fully available at invocation and/or
+ * if you do not want to stall the main thread when decompressing lots of data.
+ * 
+ * Using this does not imply an incremental feed of data chunks, for which
+ * ZstdDecompressionStream is the suitable alternative when the input is inconsistent and not available
+ * at function invocation.
  */
 export const decompressStream = /* @__PURE__ */ async (
   input: Uint8Array,
@@ -270,12 +281,12 @@ export const decompressStream = /* @__PURE__ */ async (
   const dictId = _getDictId(input);
   const [decoder, idx] = await _acquireDecoder(dictId, options);
   const result = decoder.decompressStream(input, reset);
-  idx === -1 ? decoder.destroy() : _releaseDecoder(idx, dictId);
+  idx == -1 ? decoder.destroy() : _releaseDecoder(idx, dictId);
   return result;
 };
 
 /**
- * Decompress data synchronously (when expected size is known)
+ * Decompress data synchronously (when expected size is known and is within limits)
  */
 export const decompressSync = /* @__PURE__ */ async (
   input: Uint8Array,
@@ -285,6 +296,6 @@ export const decompressSync = /* @__PURE__ */ async (
   const dictId = _getDictId(input);
   const [decoder, idx] = await _acquireDecoder(dictId, options);
   const result = decoder.decompressSync(input, expectedSize);
-  idx === -1 ? decoder.destroy() : _releaseDecoder(idx, dictId);
+  idx == -1 ? decoder.destroy() : _releaseDecoder(idx, dictId);
   return result;
 };

@@ -5,7 +5,7 @@ import {
   decompress as wasmDecompress, 
   decompressStream as wasmDecompressStream,
   ZstdDecompressionStream
-} from '../../packages/zstd-wasm-decoder/src/_esm/index.node.js'
+} from '../../packages/zstd-wasm-decoder/src/_esm/index.inlined.perf.js'
 import { loadCompressedFiles } from './util.js';
 
 const dir = join(import.meta.dirname || process.cwd(), 'compressed');
@@ -108,3 +108,6 @@ console.log(`${'='.repeat(50)}`);
 for (const { name, mbps } of results) {
   console.log(`${name.padEnd(30)} ${mbps.toFixed(2).padStart(10)} MB/s`);
 }
+
+console.log('\n');
+await import('./roundtrip.js');

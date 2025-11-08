@@ -8,30 +8,36 @@ import { _fss, err } from './utils.js';
  * ║   0x0000   ┌────────────────────────────────────┐            ║
  * ║            │      Stack Space (8 KB)            │            ║
  * ║   0x2000   ├────────────────────────────────────┤            ║
- * ║            │   ZSTD_DCtx Context (~64 KB)       │            ║
+ * ║            │  Stream Structs (32 bytes):        │            ║
+ * ║            │    ┌─────────────────────────┐     │            ║
+ * ║            │    │ ZSTD_inBuffer (16b)     │     │            ║
+ * ║            │    │ - srcPtr  (4 bytes)     │     │            ║
+ * ║            │    │ - size    (4 bytes)     │     │            ║
+ * ║            │    │ - pos     (4 bytes)     │     │            ║
+ * ║            │    │ - pad     (4 bytes)     │     │            ║
+ * ║            │    ├─────────────────────────┤     │            ║
+ * ║            │    │ ZSTD_outBuffer (16b)    │     │            ║
+ * ║            │    │ - dstPtr  (4 bytes)     │     │            ║
+ * ║            │    │ - size    (4 bytes)     │     │            ║
+ * ║            │    │ - pos     (4 bytes)     │     │            ║
+ * ║            │    │ - pad     (4 bytes)     │     │            ║
+ * ║            │    └─────────────────────────┘     │            ║
+ * ║   0x2020   ├────────────────────────────────────┤            ║
+ * ║            │   ZSTD_DCtx Context (~96 KB)       │            ║
  * ║            │   (Decompression context +         │            ║
- * ║            │    workspace)                      │            ║
- * ║ ~0x12000   ├────────────────────────────────────┤            ║
+ * ║            │    64kb workspace)                 │            ║
+ * ║  0x19660   ├────────────────────────────────────┤            ║
+ * ║            │   Read-only constants  2208b       │            ║
+ * ║  0x19f00   ├────────────────────────────────────┤            ║
+ * ║            │   ZSTD_DDict Ptr    (4b)           │            ║
+ * ║  0x19f04   ├────────────────────────────────────┤            ║
  * ║            │   Dictionary (optional)            │            ║
  * ║            │   (up to 2 MB)                     │            ║
  * ║            │   (only allocated if provided)     │            ║
  * ║    +2MB    ├────────────────────────────────────┤            ║
- * ║            │  Stream Structs (24 bytes):        │            ║
- * ║            │    ┌─────────────────────────┐     │            ║
- * ║            │    │ ZSTD_inBuffer (12b)     │     │            ║
- * ║            │    │ - srcPtr  (4 bytes)     │     │            ║
- * ║            │    │ - size    (4 bytes)     │     │            ║
- * ║            │    │ - pos     (4 bytes)     │     │            ║
- * ║            │    ├─────────────────────────┤     │            ║
- * ║            │    │ ZSTD_outBuffer (12b)    │     │            ║
- * ║            │    │ - dstPtr  (4 bytes)     │     │            ║
- * ║            │    │ - size    (4 bytes)     │     │            ║
- * ║            │    │ - pos     (4 bytes)     │     │            ║
- * ║            │    └─────────────────────────┘     │            ║
- * ║    +24b    ├────────────────────────────────────┤            ║
  * ║            │    Source Buffer (2 MB)            │            ║
  * ║            │    (Compressed input staging)      │            ║
- * ║    +2MB    ├────────────────────────────────────┤            ║
+ * ║            ├────────────────────────────────────┤            ║
  * ║            │    Destination Buffer (8.4 MB)     │            ║
  * ║            │    + 1mb margin                    │            ║
  * ║            │  Sized for level 19 compression:   │            ║
@@ -56,8 +62,8 @@ import { _fss, err } from './utils.js';
  * ║   to streaming decompression                                 ║
  * ║                                                              ║
  * ║ • Memory is managed primarily from JS by resetting buffer    ║
- * ║   pointers back to dstPtr at every freshly initialized       ║
- * ║   stream, avoiding WASM heap growth                          ║
+ * ║   pointers back to dstPtr at every initialized               ║
+ * ║   decompression, avoiding WASM heap growth                   ║
  * ║                                                              ║
  * ║ • The WASM memory can grow into the JS runtime if needed,    ║
  * ║   but we size the initial allocation to handle most common   ║
@@ -65,9 +71,7 @@ import { _fss, err } from './utils.js';
  * ╚══════════════════════════════════════════════════════════════╝
  */
 
-
 /**
- *    
  *    https://github.com/facebook/zstd/blob/release/lib/decompress/zstd_decompress.c#L1980
  * 
  *    Level 19 memory requirements:
@@ -91,13 +95,13 @@ import { _fss, err } from './utils.js';
  *          https://facebook.github.io/zstd/zstd_manual.html
  */
 
-const _MAX_DST_BUF = 9830464;  // 9.37 MB
 export const _MAX_SRC_BUF = 2 * 1024 * 1024;  // 2 MB input buffer
+const _MAX_DST_BUF = 9830464;  // 9.37 MB
 const _STREAM_RESULT: StreamResult = { buf: new Uint8Array(0), in_offset: 0 };
+const _streamInputStructPtr = 8192
+const _streamOutputStructPtr = 8208
 class ZstdDecoder {
-  private _wasm!: WebAssembly.Instance;
   private _exports!: DecoderWasmExports;
-  private _memory!: WebAssembly.Memory;
   private _HEAPU8!: Uint8Array;
   private _HEAPU32!: Uint32Array;
   
@@ -107,14 +111,10 @@ class ZstdDecoder {
     maxDstSize: number;
   };
 
-  // Memory pointers
-  private _streamInputStructPtr: number = 0;
-  private _streamOutputStructPtr: number = 0;
-  private _ddict: number = 0;
+  // Memory pointers - they are tracked primarly here.
+  // For the period of an ongoing streaming decompression, they are also tracked within ZSTD_dctx
   private _srcPtr: number = 0;
   private _dstPtr: number = 0;
-
-  private _bufferDstSize: number = _MAX_DST_BUF;
   
   constructor(options: DecoderOptions = {}) {
     this._options = {
@@ -128,56 +128,38 @@ class ZstdDecoder {
    * Initialize with a compiled WebAssembly module
    */
   init(wasmModule: WebAssembly.Module): ZstdDecoder {
-    this._wasm = new WebAssembly.Instance(wasmModule, { env: {} });;
-    return this._initCommon();
+    return this._initCommon(new WebAssembly.Instance(wasmModule, { env: {} }));
   }
 
   /**
    * Initialize with an existing WebAssembly instance
    */
   _initWithInstance(wasmInstance: WebAssembly.Instance, _wasmModule?: WebAssembly.Module): ZstdDecoder {
-    this._wasm = wasmInstance;
-    return this._initCommon();
+    return this._initCommon(wasmInstance);
   }
 
-  private _initCommon(): ZstdDecoder {
-    this._exports = this._wasm.exports as unknown as DecoderWasmExports;
-    this._memory = (this._wasm.exports).memory as WebAssembly.Memory;
+  private _initCommon(wasmInstance: WebAssembly.Instance): ZstdDecoder {
+    this._exports = wasmInstance.exports as unknown as DecoderWasmExports;
+    const _memory = this._exports.memory as WebAssembly.Memory;
 
-    this._HEAPU8 = new Uint8Array(this._memory.buffer);
-    this._HEAPU32 = new Uint32Array(this._memory.buffer);
+    this._HEAPU8 = new Uint8Array(_memory.buffer);
+    this._HEAPU32 = new Uint32Array(_memory.buffer);
 
-    // Reserve space for the streaming buffer structs:
-    // - ZSTD_inBuffer (12 bytes): { srcPtr, size, pos }
-    // - ZSTD_outBuffer (12 bytes): { dstPtr, size, pos }
-    // We'll keep both structs contiguous in memory.
-    // Allocate 24 bytes for both structs in one go
-    this._streamInputStructPtr = 8196;
-    // Output buffer struct goes after input's 12 bytes.
-    this._streamOutputStructPtr = this._streamInputStructPtr + 12;
-
-    this._exports.createDCtx();
+    this._exports._initialize();
 
     // Initialize dictionary if provided
     if (this._options.dictionary) {
       const _dictLen = this._options.dictionary.length
       if (_dictLen > _MAX_SRC_BUF*2) {
-        throw new err('dict>2mb max size');
+        throw new err('dict>2mb');
       }
-      const dictPtr = this._malloc(_dictLen);
+      const dictPtr = this._exports.malloc(_dictLen);
       this._HEAPU8.set(this._options.dictionary as Uint8Array, dictPtr);
-      this._ddict = this._exports.createDict(dictPtr, _dictLen);
+      this._exports.cd(dictPtr, _dictLen);
     }
-    this._srcPtr = this._malloc(_MAX_SRC_BUF);
+    this._srcPtr = this._exports.malloc(_MAX_SRC_BUF);
     this._dstPtr = this._srcPtr + _MAX_SRC_BUF // We don't malloc dst buf. Its where dst buf starts. Zstd will malloc
     return this;
-  }
-
-  /**
-   * Allocate memory in WASM module
-   */
-  private _malloc(size: number): number {
-    return this._exports.malloc(size);
   }
 
   /**
@@ -185,20 +167,17 @@ class ZstdDecoder {
    * Falls back to asynchronous compression if the expected size
    * is not hinted in advance.
    * 
-   * From measurements taken, it is more efficient to fallback
-   * to streaming than to attempt to infer the expected size from the headers.
-   * 
    * @param compressedData - Compressed data
    * @param expectedSize - Optional expected decompressed size. If not provided, falls back to streaming.
    * @returns Decompressed data
    */
   decompressSync(compressedData: Uint8Array, expectedSize?: number): Uint8Array {
-    if (!this._exports) throw new err('not initialized');
+    if (!this._exports) throw new err('not init');
     
     const srcSize = compressedData.length;
     
     if (srcSize > this._options.maxSrcSize ) {
-      throw new err(`comp data ${srcSize}b>maxSrcSize lim ${this._options.maxSrcSize}b)`);
+      throw new err(`comp dat ${srcSize}b>maxSrcSize lim ${this._options.maxSrcSize}b)`);
     }
     
     if(!expectedSize) expectedSize = _fss(compressedData)
@@ -208,23 +187,21 @@ class ZstdDecoder {
       return this.decompressStream(compressedData, true).buf;
     }
     
+    this._exports.pb(this._dstPtr);
     this._HEAPU8.set(compressedData as Uint8Array, this._srcPtr);
-    this._exports.prune_buf(this._dstPtr);
     const _dstPtr = this._dstPtr
-    const result = this._exports.decompressSync(
+    const result = this._exports.dS(
       _dstPtr,
-      this._bufferDstSize,
+      _MAX_DST_BUF,
       this._srcPtr,
-      srcSize,
-      this._ddict
+      srcSize
     );
 
     if (result < 0) {
-      throw new err(`decomp err ${result}`);
+      throw new err(`dec err ${result}`);
     }
     return this._HEAPU8.slice(_dstPtr, _dstPtr + result);
   }
-
 
   /**
    * Optimized struct write using Uint32Array when properly aligned / (JIT)
@@ -251,17 +228,15 @@ class ZstdDecoder {
    * @returns Decompression result with buffer, code, and input offset
    */
   decompressStream(input: Uint8Array, reset = false): StreamResult {
-    if (!this._exports) throw new err('not initialized');
+    if (!this._exports) throw new err('not init');
     
     // Reset stream state for new decompression - ZSTD_reset_session_only = 1
     if (reset) {
-      this._exports.reset();
-
-      if (this._ddict) this._exports.refDict(this._ddict);
-
-      this._exports.prune_buf(this._dstPtr);
+      this._exports.re();
+      this._exports.pb(this._dstPtr);
     }
-    if (!input || input.length === 0) return _STREAM_RESULT;
+    const inLen = input.length || 0
+    if (inLen == 0) return _STREAM_RESULT;
 
     const output: Uint8Array[] = [];
     
@@ -278,22 +253,22 @@ class ZstdDecoder {
     let dstOffset = dstBufStart;
     let dstMaxBuf = dstBufStart + 655360
     let lastOut = 0
-    while (offset < input.length) {
-      const toProcess = Math.min(Math.min(input.length - offset, suggestedInputSize), 262150);
+    while (offset < inLen) {
+      const toProcess = Math.min(Math.min(inLen - offset, suggestedInputSize), 262150);
       this._HEAPU8.set((input as Uint8Array).subarray(offset, offset + toProcess), this._srcPtr);
       
-      this._writeStreamStruct(this._streamInputStructPtr, this._srcPtr, toProcess);
+      this._writeStreamStruct(_streamInputStructPtr, this._srcPtr, toProcess);
 
       if(dstOffset == dstBufStart) {
-        this._writeStreamStruct(this._streamOutputStructPtr, dstOffset, 917501);
+        this._writeStreamStruct(_streamOutputStructPtr, dstOffset, 917501);
       }
       
       // Process all data in current block
-      while (this._readStreamPos(this._streamInputStructPtr) < toProcess) {
-        const result = this._exports.decStream();
-        if (result < 0) throw new err(`decomp err ${result}`);
+      while (this._readStreamPos(_streamInputStructPtr) < toProcess) {
+        const result = this._exports.ds();
+        if (result < 0) throw new err(`dec err ${result}`);
         
-        const outputPos = this._readStreamPos(this._streamOutputStructPtr);
+        const outputPos = this._readStreamPos(_streamOutputStructPtr);
 
         totalOutputSize += dstOffset == dstBufStart ? outputPos : (outputPos - lastOut);
         lastOut = outputPos
@@ -304,11 +279,11 @@ class ZstdDecoder {
           if(dstOffset >= dstMaxBuf) {
             output.push(this._HEAPU8.slice(dstBufStart, dstOffset));
             dstOffset = dstBufStart;
-            this._writeStreamStruct(this._streamOutputStructPtr, dstOffset, 917501);
+            this._writeStreamStruct(_streamOutputStructPtr, dstOffset, 917501);
           }
           
           if (totalOutputSize > this._options.maxDstSize) {
-            throw new err(`decomp size ${totalOutputSize}b>maxDstSize lim ${this._options.maxDstSize}b`);
+            throw new err(`dec size ${totalOutputSize}b>maxDstSize lim ${this._options.maxDstSize}b`);
           }
         }
       }
@@ -320,7 +295,7 @@ class ZstdDecoder {
     
     return {
       buf: _concatUint8Arrays(output, totalOutputSize),
-      in_offset: input.length,
+      in_offset: inLen,
     };
   }
 
@@ -329,7 +304,7 @@ class ZstdDecoder {
    */
   destroy(): void {
     //@ts-expect-error gc.
-    this._ddict = this._srcPtr = this._dstPtr = this._streamInputStructPtr = this._streamOutputStructPtr = this._wasm = this._exports = this._memory = this._HEAPU8 = this._HEAPU32 = null;
+    this._exports = this._HEAPU8 = this._HEAPU32 = null;
   }
 }
 

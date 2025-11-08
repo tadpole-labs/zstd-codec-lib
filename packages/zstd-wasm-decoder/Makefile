@@ -19,7 +19,7 @@ endif
 
 CLANG = $(LLVM_DIR)/bin/clang
 
-EXPORTS = malloc prune_buf createDCtx A createDict decompressSync decStream reset refDict get_dctx_ptr get_dctx_struct
+EXPORTS = malloc _initialize pb cd ds re dS
 BIN_DIR = bin
 AMALGAMATED_SOURCE = $(BIN_DIR)/zstd_wasm_amalgamated.c
 OUTPUT_DIR = build
@@ -34,28 +34,14 @@ CFLAGS += -nostdlib
 CFLAGS += -I$(BIN_DIR)/include -I$(BIN_DIR) -I../../vendor/zstd/lib
 CFLAGS += -ffreestanding
 CFLAGS += -msimd128
-CFLAGS += -mrelaxed-simd
 CFLAGS += -msign-ext
-CFLAGS += -mextended-const
-CFLAGS += -mmultivalue
-CFLAGS += -mmutable-globals
-CFLAGS += -mtail-call
+# CFLAGS += -mtail-call
 CFLAGS += -mno-atomics
-
+CFLAGS += -mbulk-memory
+CFLAGS += -mexec-model=reactor
 CFLAGS += -mcpu=generic
 CFLAGS += -flto -DNDEBUG -g0
-CFLAGS += -fno-stack-protector -fomit-frame-pointer -fno-ident -fno-trapping-math
-CFLAGS += -ffunction-sections -fdata-sections
-CFLAGS += -mbulk-memory
-CFLAGS += -mbulk-memory-opt
-
-CFLAGS += -fno-math-errno
-CFLAGS += -fmerge-all-constants
-CFLAGS += -fno-strict-aliasing
-
-# Decoder only build
-CFLAGS += -DZSTD_LIB_EXCLUDE_COMPRESSORS_GREEDY_AND_UP
-CFLAGS += -DZSTD_LIB_EXCLUDE_COMPRESSORS_DFAST_AND_UP
+CFLAGS += -fno-stack-protector -fomit-frame-pointer -fno-ident -fno-trapping-math -ffunction-sections -fdata-sections -fuse-linker-plugin -fno-sanitize=pointer-overflow -fno-sanitize=signed-integer-overflow -fno-math-errno -fmerge-all-constants -fno-strict-aliasing
 
 # Best bang for the byte
 CFLAGS += -DHUF_FORCE_DECOMPRESS_X2
@@ -63,33 +49,13 @@ CFLAGS += -DZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
 
 # Needed for SIMD
 # CFLAGS += -DZSTD_NO_INTRINSICS
-CFLAGS += -DZSTD_NO_UNUSED_FUNCTIONS
-CFLAGS += -DZSTD_LIB_DEPRECATED=0
-CFLAGS += -DBACKTRACE_ENABLE=0
-CFLAGS += -DDYNAMIC_BMI2=0
-CFLAGS += -DSTATIC_BMI2=0
-
-CFLAGS += -DZSTD_LEGACY_MULTITHREADED_API=0
-CFLAGS += -DZSTD_NO_TRACE
-CFLAGS += -DZSTD_TRACE=0
-CFLAGS += -DHAVE_ZLIB=0
-CFLAGS += -DHAVE_LZMA=0
-CFLAGS += -DHAVE_LZ4=0
-CFLAGS += -DZSTD_LEGACY_SUPPORT=0
-CFLAGS += -DZSTD_DISABLE_ASM
-CFLAGS += -DZSTD_ENABLE_ASM_X86_64_BMI2=0
-
+CFLAGS += -DNO_PREFETCH
+CFLAGS += -DXXH_NO_PREFETCH
 CFLAGS += -Wall -Wextra -Wcast-qual -Wcast-align -Wshadow
 CFLAGS += -Wstrict-aliasing=1 -Wstrict-prototypes -Wundef
 CFLAGS += -Wpointer-arith -Wformat=2 -Wwrite-strings
 CFLAGS += -Wredundant-decls -Wno-unused-parameter
 
-CFLAGS += -DZSTD_LIB_DECOMPRESSION
-CFLAGS += -UZSTD_MULTITHREAD
-CFLAGS += -DZSTD_STATIC_LINKING_ONLY
-CFLAGS += -DZSTD_LIB_DICTBUILDER=0
-CFLAGS += -DZSTD_LIB_COMPRESSION=0
-CFLAGS += -DZSTD_LIB_DEPRECATED=0
 CFLAGS += -fwrapv-pointer
 
 CFLAGS += -mllvm -polly
@@ -97,15 +63,14 @@ CFLAGS += -mllvm -polly-position=before-vectorizer
 CFLAGS += -mllvm -polly-vectorizer=stripmine
 CFLAGS += -fvectorize
 CFLAGS += -fslp-vectorize
-CFLAGS_SIZE = -DZSTD_NO_INLINE
-# Size-optimized build flags
-CFLAGS_SIZE += $(CFLAGS) -Oz
 
-# Performance-optimized build flags
+CFLAGS_SIZE += -DZSTD_NO_INLINE
+
+CFLAGS_SIZE += $(CFLAGS) -Oz
 CFLAGS_PERF = $(CFLAGS) -Os
 
-# createCCtx is the entry
-LDFLAGS = -Wl,--no-entry
+# _initialize is the entry ("ultra minimal ZSTD_createDCtx)
+# LDFLAGS = -Wl,--no-entry
 LDFLAGS += -Wl,--allow-undefined
 LDFLAGS += -Wl,--strip-all
 LDFLAGS += -Wl,--threads=1
@@ -117,23 +82,29 @@ LDFLAGS += -Wl,--lto-O3
 LDFLAGS += -Wl,--lto-CGO3
 LDFLAGS += -Wl,--gc-sections
 LDFLAGS += -Wl,--compress-relocations
+LDFLAGS += -Wl,--extra-features=mutable-globals
 
 # Safer layout
 # https://bugs.llvm.org/show_bug.cgi?id=37181
 # https://github.com/rustwasm/team/issues/81#issue-303617986
 LDFLAGS += -Wl,--stack-first
-LDFLAGS += -Wl,--global-base=0
+LDFLAGS += -Wl,--global-base=8192
 LDFLAGS += -Wl,--merge-data-segments
 LDFLAGS += -Wl,--print-map
 
+# --enable-tail-call minimal benefit for relative compat issues
 # wasm-opt flags
-WASM_OPT_FLAGS_PRE = --untee --converge
+WASM_OPT_FLAGS_PRE = --monomorphize --generate-global-effects --untee --converge -Os
 
 WASM_OPT_FLAGS_COMMON = \
 	--enable-simd \
-	--enable-relaxed-simd \
-	--enable-extended-const \
-	--enable-tail-call \
+	--inlining \
+	--inlining-optimizing \
+	--enable-sign-ext \
+	--enable-bulk-memory \
+	--merge-locals  \
+	--tuple-optimization \
+	--rse \
 	--strip-debug \
 	--strip-dwarf \
 	--strip-eh \
@@ -146,8 +117,6 @@ WASM_OPT_FLAGS_COMMON = \
 	--vacuum \
 	--coalesce-locals-learning \
 	--low-memory-unused \
-	--enable-bulk-memory \
-	--enable-bulk-memory-opt \
 	--ignore-implicit-traps \
 	--closed-world
 
@@ -160,11 +129,12 @@ WASM_OPT_FLAGS_EXTRA = \
 	--gsi \
 	--gto \
 	--gufa \
+	--type-refining-gufa \
 	--gufa-cast-all \
 	--gufa-optimizing
 
-WASM_OPT_FLAGS_SIZE = $(WASM_OPT_FLAGS_PRE) -Oz -Oz $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA)
-WASM_OPT_FLAGS_PERF = $(WASM_OPT_FLAGS_PRE) -Os $(WASM_OPT_FLAGS_COMMON)
+WASM_OPT_FLAGS_SIZE =  $(WASM_OPT_FLAGS_PRE) -Oz $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA)
+WASM_OPT_FLAGS_PERF = $(WASM_OPT_FLAGS_PRE) $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA) -Os
 
 .PHONY: all clean check-tools test tests regenerate-amalgamated help size perf
 

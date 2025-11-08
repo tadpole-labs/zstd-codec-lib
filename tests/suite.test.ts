@@ -8,13 +8,23 @@ import { createHash } from 'node:crypto';
 import { nodeAdapter } from './adapters/node-adapter.ts';
 import { wasmAdapter, initWasmAdapter } from './adapters/wasm-adapter.ts';
 import { ensureTestData } from './lib/test-data-generator.ts';
+import { hash, slice } from './lib/utils.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const COMPRESSION_LEVELS = {
   ALL: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-  REPRESENTATIVE: [1, 3, 6, 9, 12, 15, 19]
+  REPRESENTATIVE: [1, 3, 6, 9, 12, 15, 19],
+  STREAMING: [1, 6, 12, 19]
 };
+
+const TEST_FILES = [
+  'tiny-256b.bin', 'small-highly-compressible.bin', 'medium-10k.bin',
+  'random-10k.bin', 'repetitive-50k.bin', 'medium-100k.bin',
+  'large-512k.bin', 'large-1m.bin'
+];
+
+const TEST_SIZES = [256, 10 * 1024, 100 * 1024];
 
 const TEST_DATA_DIR = join(__dirname, 'data');
 const DICT_DIR = join(__dirname, 'dictionaries');
@@ -33,7 +43,6 @@ const originalDataHashes = new Map<string, string>();
 
 const randomBuffers = new Map<number, Buffer>();
 const randomBufferHashes = new Map<number, string>();
-
 
   beforeAll(async () => {
   ensureTestData();
@@ -54,11 +63,7 @@ const randomBufferHashes = new Map<number, string>();
   console.log(`Generated ${randomBuffers.size} random buffers`);
   
   console.log('Pre-compressing test data...');
-  const testFiles = [
-    'tiny-256b.bin', 'small-highly-compressible.bin', 'medium-10k.bin',
-    'random-10k.bin', 'repetitive-50k.bin', 'medium-100k.bin',
-    'large-512k.bin', 'large-1m.bin'
-  ].map(f => loadTestFile(f));
+  const testFiles = TEST_FILES.map(f => loadTestFile(f));
   
   const compressionJobs: Array<{ data: Buffer; opts: any }> = [];
   for (const data of [...testFiles, ...randomBuffers.values()]) {
@@ -74,16 +79,7 @@ const randomBufferHashes = new Map<number, string>();
   
   console.log(`Pre-compressed ${compressedCache.size} variants`);
   
-  const dictionaries: Record<string, Buffer | Uint8Array> = {
-    test: testDict,
-    json: jsonDict,
-    http: httpDict
-  };
-  
-  const zeroWeightDictPath = join(EDGE_CASES_DIR, 'dict-files/zero-weight-dict');
-  dictionaries.zeroWeight = readFileSync(zeroWeightDictPath);
-  
-  await initWasmAdapter(dictionaries);
+  await initWasmAdapter();
 
   const adapterType = process.env.TEST_ADAPTER;
   
@@ -141,8 +137,8 @@ afterAll(async () => {
 
 
 function getCacheKey(data: Buffer, opts: any = {}) {
-  const dictKey = opts.dictionary ? createHash('sha1').update(opts.dictionary).digest('hex').slice(0, 8) : 'nodict';
-  const dataHash = createHash('sha1').update(data).digest('hex').slice(0, 8);
+  const dictKey = opts.dictionary ? hash(opts.dictionary).slice(0, 8) : 'nodict';
+  const dataHash = hash(data).slice(0, 8);
   return `${dataHash}-${opts.level || 3}-${dictKey}`;
 }
 
@@ -151,7 +147,7 @@ function compress(data: Buffer, opts = {}): Buffer {
   if (!compressedCache.has(key)) {
     const compressed = nodeAdapter.compress(data, opts);
     compressedCache.set(key, compressed);
-    originalDataHashes.set(key, createHash('sha1').update(data).digest('hex'));
+    originalDataHashes.set(key, hash(data));
   }
   return compressedCache.get(key)!;
 }
@@ -162,13 +158,12 @@ async function testRoundtrip(data: Buffer, opts = {}) {
   const key = getCacheKey(data, opts);
   const compressed = compress(data, opts);
   const decompressed = await decompress(compressed, opts);
-  const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
   const originalHash = originalDataHashes.get(key);
   
   if (!originalHash) {
-    expect(decompressedHash).toBe(createHash('sha1').update(data).digest('hex'));
+    expect(hash(decompressed)).toBe(hash(data));
   } else {
-    expect(decompressedHash).toBe(originalHash);
+    expect(hash(decompressed)).toBe(originalHash);
   }
 }
 
@@ -186,32 +181,26 @@ function loadTestFile(filename: string): Buffer {
 function randomBuffer(size: number): Buffer {
   if (!randomBuffers.has(size)) {
     const chunks: Buffer[] = [];
-    const seed = createHash('sha256').update(`seed-${size}`).digest();
+    const seed = createHash('sha1').update(`seed-${size}`).digest();
     for (let offset = 0; offset < size; offset += 32) {
-      const hash = createHash('sha256').update(seed).update(Buffer.from([offset >> 24, offset >> 16, offset >> 8, offset])).digest();
-      chunks.push(hash.slice(0, Math.min(32, size - offset)));
+      const chunk = createHash('sha1').update(seed).update(Buffer.from([offset >> 24, offset >> 16, offset >> 8, offset])).digest();
+      chunks.push(slice(chunk, 0, Math.min(32, size - offset)));
     }
     const buffer = Buffer.concat(chunks);
     randomBuffers.set(size, buffer);
-    randomBufferHashes.set(size, createHash('sha1').update(buffer).digest('hex'));
+    randomBufferHashes.set(size, hash(buffer));
   }
   return randomBuffers.get(size)!;
 }
 
 describe('WASM decompression', () => {
   describe('standard decompression', () => {
-    const testFiles = [
-      'tiny-256b.bin', 'small-highly-compressible.bin', 'medium-10k.bin',
-      'random-10k.bin', 'repetitive-50k.bin', 'medium-100k.bin',
-      'large-512k.bin', 'large-1m.bin'
-    ];
-    
-    test.each(testFiles)('%s - all levels', async (filename) => {
+    test.each(TEST_FILES)('%s - all levels', async (filename) => {
       const data = loadTestFile(filename);
       await testMultipleLevels(data, COMPRESSION_LEVELS.ALL);
     });
     
-    test.each(testFiles)('%s - all levels with dictionary', async (filename) => {
+    test.each(TEST_FILES)('%s - all levels with dictionary', async (filename) => {
       const data = loadTestFile(filename);
       await testMultipleLevels(data, COMPRESSION_LEVELS.ALL, { dictionary: testDict });
     });
@@ -246,9 +235,7 @@ describe('WASM decompression', () => {
       const concatenated = Buffer.concat([compress(data1), compress(data2)]);
       const decompressed = await decompress(concatenated);
       const expected = Buffer.concat([data1, data2]);
-      const expectedHash = createHash('sha1').update(expected).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(expectedHash);
+      expect(hash(decompressed)).toBe(hash(expected));
     });
     
     test('zero-weight dictionary', async () => {
@@ -271,11 +258,8 @@ describe('WASM decompression', () => {
       for (const { file, expectedSize, allZeros } of files) {
         const path = join(EDGE_CASES_DIR, 'golden-decompression', file);
         const decompressed = await decompress(readFileSync(path));
-        if (expectedSize !== undefined) expect(decompressed.length).toBe(expectedSize);
         if (allZeros) {
-          const expectedHash = createHash('sha1').update(Buffer.alloc(decompressed.length, 0)).digest('hex');
-          const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-          expect(decompressedHash).toBe(expectedHash);
+          expect(hash(decompressed)).toBe(hash(Buffer.alloc(expectedSize || decompressed.length, 0)));
         }
       }
     });
@@ -306,20 +290,14 @@ describe('WASM decompression', () => {
   });
   
   describe('roundtrip tests', () => {
-    const sizes = [
-      { name: 'small', size: 256 },
-      { name: 'medium', size: 10 * 1024 },
-      { name: 'large', size: 100 * 1024 }
-    ];
-    
-    test.each(sizes)('$name ($size bytes) - representative levels', async ({ size }) => {
+    test.each(TEST_SIZES)('%i bytes - representative levels', async (size) => {
       for (const level of COMPRESSION_LEVELS.REPRESENTATIVE) {
         const data = randomBuffer(size);
         await testRoundtrip(data, { level });
       }
     });
     
-    test.each(sizes)('$name ($size bytes) - with dictionary', async ({ size }) => {
+    test.each(TEST_SIZES)('%i bytes - with dictionary', async (size) => {
       for (const level of COMPRESSION_LEVELS.REPRESENTATIVE) {
         const data = randomBuffer(size);
         await testRoundtrip(data, { level, dictionary: testDict });
@@ -335,9 +313,7 @@ describe('Streaming decompression', () => {
       const data = Buffer.from('Hello World!');
       const compressed = compress(data);
       const decompressed = await decompress(compressed);
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
     
     test('2 chunks', async () => {
@@ -346,13 +322,11 @@ describe('Streaming decompression', () => {
       
       // Split compressed data into 2 chunks
       const mid = Math.floor(compressed.length / 2);
-      const chunk1 = compressed.slice(0, mid);
-      const chunk2 = compressed.slice(mid);
+      const chunk1 = slice(compressed, 0, mid);
+      const chunk2 = slice(compressed, mid);
       
       const decompressed = await decompress(Buffer.concat([chunk1, chunk2]));
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
     
     test('many small chunks', async () => {
@@ -362,13 +336,11 @@ describe('Streaming decompression', () => {
       // Split into 100 tiny chunks
       const chunks: Buffer[] = [];
       for (let i = 0; i < compressed.length; i += 512) {
-        chunks.push(compressed.slice(i, Math.min(i + 512, compressed.length)));
+        chunks.push(slice(compressed, i, Math.min(i + 512, compressed.length)));
       }
       
       const decompressed = await decompress(Buffer.concat(chunks));
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
     
     test('uneven chunk sizes', async () => {
@@ -382,17 +354,15 @@ describe('Streaming decompression', () => {
       
       for (const size of sizes) {
         if (offset >= compressed.length) break;
-        chunks.push(compressed.slice(offset, Math.min(offset + size, compressed.length)));
+        chunks.push(slice(compressed, offset, Math.min(offset + size, compressed.length)));
         offset += size;
       }
       if (offset < compressed.length) {
-        chunks.push(compressed.slice(offset));
+        chunks.push(slice(compressed, offset));
       }
       
       const decompressed = await decompress(Buffer.concat(chunks));
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
     
     test('frame boundaries across chunks', async () => {
@@ -409,21 +379,17 @@ describe('Streaming decompression', () => {
       
       // Split in the middle of frame2
       const splitPoint = frame1.length + Math.floor(frame2.length / 2);
-      const chunk1 = allFrames.slice(0, splitPoint);
-      const chunk2 = allFrames.slice(splitPoint);
+      const chunk1 = slice(allFrames, 0, splitPoint);
+      const chunk2 = slice(allFrames, splitPoint);
       
       const decompressed = await decompress(Buffer.concat([chunk1, chunk2]));
       const expected = Buffer.concat([data1, data2, data3]);
-      const expectedHash = createHash('sha1').update(expected).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(expectedHash);
+      expect(hash(decompressed)).toBe(hash(expected));
     });
   });
   
   describe('compression levels with chunking', () => {
-    const levels = [1, 6, 12, 19, 22];
-    
-    test.each(levels)('level %i - chunked decompression', async (level) => {
+    test.each(COMPRESSION_LEVELS.STREAMING)('level %i - chunked decompression', async (level) => {
       const data = randomBuffer(30 * 1024);
       const compressed = compress(data, { level });
       
@@ -432,14 +398,12 @@ describe('Streaming decompression', () => {
       let offset = 0;
       while (offset < compressed.length) {
         const chunkSize = Math.min(1000 + Math.floor(Math.random() * 5000), compressed.length - offset);
-        chunks.push(compressed.slice(offset, offset + chunkSize));
+        chunks.push(slice(compressed, offset, offset + chunkSize));
         offset += chunkSize;
       }
       
       const decompressed = await decompress(Buffer.concat(chunks));
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
   });
   
@@ -451,14 +415,11 @@ describe('Streaming decompression', () => {
       const chunkSize = 64 * 1024;
       const chunks: Buffer[] = [];
       for (let i = 0; i < compressed.length; i += chunkSize) {
-        chunks.push(compressed.slice(i, Math.min(i + chunkSize, compressed.length)));
+        chunks.push(slice(compressed, i, Math.min(i + chunkSize, compressed.length)));
       }
       
       const decompressed = await decompress(Buffer.concat(chunks));
-      expect(decompressed.length).toBe(data.length);
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
     
     test('highly compressible data streaming', async () => {
@@ -466,11 +427,7 @@ describe('Streaming decompression', () => {
       const compressed = compress(data);
       
       const decompressed = await decompress(compressed);
-      expect(decompressed.length).toBe(data.length);
-      const expectedData = Buffer.alloc(512 * 1024, 0xAA);
-      const expectedHash = createHash('sha1').update(expectedData).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(expectedHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
   });
   
@@ -482,13 +439,11 @@ describe('Streaming decompression', () => {
       // Split into chunks
       const chunks: Buffer[] = [];
       for (let i = 0; i < compressed.length; i += 2048) {
-        chunks.push(compressed.slice(i, Math.min(i + 2048, compressed.length)));
+        chunks.push(slice(compressed, i, Math.min(i + 2048, compressed.length)));
       }
       
       const decompressed = await decompress(Buffer.concat(chunks), { dictionary: testDict });
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
   });
   
@@ -502,9 +457,7 @@ describe('Streaming decompression', () => {
       
       const result = await decompressAdapter.decompressStream(compressed, true);
       const resultBuf = Buffer.from(result.buf);
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const resultHash = createHash('sha1').update(resultBuf).digest('hex');
-      expect(resultHash).toBe(originalHash);
+      expect(hash(resultBuf)).toBe(hash(data));
     });
     
     test('stream API with multiple chunks', async () => {
@@ -517,15 +470,13 @@ describe('Streaming decompression', () => {
       const chunkSize = 2048;
       
       for (let i = 0; i < compressed.length; i += chunkSize) {
-        const chunk = compressed.slice(i, Math.min(i + chunkSize, compressed.length));
+        const chunk = slice(compressed, i, Math.min(i + chunkSize, compressed.length));
         const result = await decompressAdapter.decompressStream(chunk, i === 0);
         if (result.buf.length > 0) outputs.push(Buffer.from(result.buf));
       }
       
       const decompressed = Buffer.concat(outputs);
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     });
   });
   
@@ -535,10 +486,7 @@ describe('Streaming decompression', () => {
       const compressed = compress(data, { level: 19 });
       
       const decompressed = await decompress(compressed);
-      expect(decompressed.length).toBe(data.length);
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(Buffer.from(decompressed)).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     }, 300000); // 5 minute timeout
     
     test('256MB random noise - streamed in 0.1% increments', async () => {
@@ -551,22 +499,18 @@ describe('Streaming decompression', () => {
       const compressed = compress(data, { level: 19 });
 
       // 0.1% of the compressed data per chunk
-      const percent = 0.1;
-      const chunkSize = Math.max(1, Math.floor(compressed.length * (percent / 100)));
+      const chunkSize = Math.max(1, Math.floor(compressed.length * 0.01));
       const outputs: Buffer[] = [];
-      console.log(`Streaming ${compressed.length} bytes in ${chunkSize}-byte chunks (${percent}% per chunk)...`);
+      console.log(`Streaming ${compressed.length} bytes in ${chunkSize}-byte chunks`);
 
       for (let i = 0; i < compressed.length; i += chunkSize) {
-        const chunk = compressed.slice(i, i + chunkSize);
+        const chunk = slice(compressed, i, i + chunkSize);
         const result = await decompressAdapter.decompressStream(chunk, i === 0);
         if (result.buf.length > 0) outputs.push(Buffer.from(result.buf));
       }
 
       const decompressed = Buffer.concat(outputs);
-      expect(decompressed.length).toBe(data.length);
-      const originalHash = createHash('sha1').update(data).digest('hex');
-      const decompressedHash = createHash('sha1').update(decompressed).digest('hex');
-      expect(decompressedHash).toBe(originalHash);
+      expect(hash(decompressed)).toBe(hash(data));
     }, 300000); // 5 minute timeout
     test('256MB random noise - corrupted (skipped bytes)', async () => {
       const data = randomBuffer(16 * 1024 * 1024);

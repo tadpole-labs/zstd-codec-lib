@@ -33,7 +33,7 @@ export const rzfh = /* @__PURE__ */ (dat: Uint8Array): number | DZS => {
     const flg = dat[4];
     // single segment, checksum, dict flag, frame content flag
     const ss = (flg >> 5) & 1, df = flg & 3, fcf = flg >> 6;
-    if (flg & 8) throw new err('invalid zstd data'); // Reserved bit check
+    if (flg & 8) throw new err('bad zstd dat'); // Reserved bit check
     // byte
     let bt = 6 - ss;
     // dict bytes
@@ -56,5 +56,5 @@ export const rzfh = /* @__PURE__ */ (dat: Uint8Array): number | DZS => {
       u: fss
     };
   }
-  throw new err('invalid zstd data');
+  throw new err('bad zstd dat');
 };

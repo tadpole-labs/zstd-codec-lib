@@ -16,8 +16,6 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const pathname = url.pathname;
 
-    if (pathname === '/health') return new Response('OK');
-
     if (pathname.startsWith('/bundles/')) {
       try {
         const file = Bun.file(join(TEST_DIR, pathname.slice(1)));
@@ -37,10 +35,7 @@ const server = Bun.serve({
       }
     }
     
-    if (pathname.startsWith('/data/') || 
-        pathname.startsWith('/dictionaries/') || 
-        pathname.startsWith('/edge-cases/') ||
-        pathname.startsWith('/packages/')) {
+    if (pathname.startsWith('/dictionaries/') || pathname.startsWith('/edge-cases/')  || pathname.startsWith('/packages/')) {
       try {
         const filePath = pathname.startsWith('/packages/') 
           ? join(TEST_DIR, '..', pathname.slice(1))

@@ -8,7 +8,7 @@
   <script type="module">
     import { ZstdDecoder } from 'http://localhost:42069/packages/zstd-wasm-decoder/src/_esm/zstd-wasm.js';
     
-    async function loadDictionary(name) {
+    async function loadDict(name) {
       try {
         const response = await fetch(`http://localhost:42069/dictionaries/${name}`);
         if (!response.ok) return null;
@@ -17,34 +17,37 @@
         return null;
       }
     }
+    const bufferToHex = (buffer) => 
+      Array.from(new Uint8Array(buffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
     
-    // Load and compile WASM module once (reuse for all decoders)
+    const hash = async (data) => 
+      bufferToHex(await crypto.subtle.digest('SHA-1', data));
+
+    // Load and compile WASM module once
     const wasmUrl = 'http://localhost:42069/packages/zstd-wasm-decoder/src/_esm/zstd-decoder.wasm';
     const wasmModule = await WebAssembly.compileStreaming(fetch(wasmUrl));
     
     // Load all dictionaries
     const dictionaries = {
-      test: await loadDictionary('test.dict'),
-      json: await loadDictionary('test.json.dict'),
-      http: await loadDictionary('../edge-cases/golden-dictionaries/http-dict-missing-symbols'),
-      zeroWeight: await loadDictionary('../edge-cases/dict-files/zero-weight-dict'),
+      test: await loadDict('test.dict'),
+      json: await loadDict('test.json.dict'),
+      http: await loadDict('../edge-cases/golden-dictionaries/http-dict-missing-symbols'),
+      zeroWeight: await loadDict('../edge-cases/dict-files/zero-weight-dict'),
     };
-
-    // Pre-compute dictionary hashes for fast lookup
+    
     const dictHashes = new Map();
     for (const [name, dict] of Object.entries(dictionaries)) {
-      if (dict) {
-        const hash = await crypto.subtle.digest('SHA-256', dict);
-        dictHashes.set(bufferToHex(hash), name);
-      }
+      if (dict) dictHashes.set(await hash(dict), name);
     }
 
     const decoders = new Map();
     
     // No-dict decoder
     const mainDecoder = new ZstdDecoder({
-      maxSrcSize: 100 * 1024 * 1024,
-      maxDstSize: 100 * 1024 * 1024
+      maxSrcSize: 512 * 1024 * 1024,
+      maxDstSize: 512 * 1024 * 1024
     });
     await mainDecoder.init(wasmModule);
     decoders.set('', mainDecoder);
@@ -53,8 +56,8 @@
     for (const [name, dict] of Object.entries(dictionaries)) {
       if (dict) {
         const decoder = new ZstdDecoder({
-          maxSrcSize: 100 * 1024 * 1024,
-          maxDstSize: 100 * 1024 * 1024,
+          maxSrcSize: 512 * 1024 * 1024,
+          maxDstSize: 512 * 1024 * 1024,
           dictionary: dict
         });
         await decoder.init(wasmModule);
@@ -82,16 +85,9 @@
     };
     
     async function getDictName(dictData) {
-      const hash = await crypto.subtle.digest('SHA-256', dictData);
-      return dictHashes.get(bufferToHex(hash)) || '';
+      const dictHash = await hash(dictData);
+      return dictHashes.get(dictHash) || '';
     }
-    
-    function bufferToHex(buffer) {
-      return Array.from(new Uint8Array(buffer))
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    }
-    
     console.log('WASM decoder initialized with dictionaries:', Object.keys(dictionaries).filter(k => dictionaries[k]));
   </script>
 </body>

@@ -38,11 +38,28 @@ export class BrowserAdapter {
       return window.ZstdWasm?.ready === true;
     }, { timeout: 120000 });
     
+    // Inject utility functions into the browser context
+    await this.page.evaluate(() => {
+      // @ts-ignore
+      window.base64ToUint8Array = (base64: string): Uint8Array => {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+        return bytes;
+      };
+      
+      // @ts-ignore
+      window.uint8ArrayToBase64 = (bytes: Uint8Array): string => {
+        let binaryStr = '';
+        for (let i = 0; i < bytes.length; i += 32768) {
+          const end = Math.min(i + 32768, bytes.length);
+          for (let j = i; j < end; j++) binaryStr += String.fromCharCode(bytes[j]);
+        }
+        return btoa(binaryStr);
+      };
+    });
+    
     console.log(`${this.options.browser} initialized`);
-  }
-  
-  compress(data: Buffer | Uint8Array, opts = {}): Buffer {
-    throw new Error('Compression not supported in browser (decoder-only)');
   }
   
   async decompress(data: Buffer | Uint8Array, opts: ZstdOptions = {}): Promise<Buffer> {
@@ -55,35 +72,21 @@ export class BrowserAdapter {
     }
     
     const resultBase64 = await this.page.evaluate(async ([dataBase64, options]) => {
-      const binaryString = atob(dataBase64 as string);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      // @ts-ignore
+      const bytes = window.base64ToUint8Array(dataBase64 as string);
       
       // Deserialize dictionary if present
       const decompressOpts: any = { ...options };
       if ((options as any).dictionaryBase64) {
-        const dictBinaryString = atob((options as any).dictionaryBase64);
-        const dictBytes = new Uint8Array(dictBinaryString.length);
-        for (let i = 0; i < dictBinaryString.length; i++) {
-          dictBytes[i] = dictBinaryString.charCodeAt(i);
-        }
-        decompressOpts.dictionary = dictBytes;
+        // @ts-ignore
+        decompressOpts.dictionary = window.base64ToUint8Array((options as any).dictionaryBase64);
         delete decompressOpts.dictionaryBase64;
       }
       
       // @ts-ignore
       const decompressed = await window.ZstdWasm.decompress(bytes, decompressOpts);
-      let binaryStr = '';
-      const chunkSize = 32768
-      for (let i = 0; i < decompressed.length; i += chunkSize) {
-        const end = Math.min(i + chunkSize, decompressed.length);
-        for (let j = i; j < end; j++) {
-          binaryStr += String.fromCharCode(decompressed[j]);
-        }
-      }
-      return btoa(binaryStr);
+      // @ts-ignore
+      return window.uint8ArrayToBase64(decompressed);
     }, [base64, serializedOpts]) as string;
     
     return Buffer.from(resultBase64, 'base64');
@@ -99,37 +102,23 @@ export class BrowserAdapter {
     }
     
     const result = await this.page.evaluate(async ([dataBase64, isFirstChunk, options]) => {
-      const binaryString = atob(dataBase64 as string);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      // @ts-ignore
+      const bytes = window.base64ToUint8Array(dataBase64 as string);
       
       // Deserialize dictionary if present
       const decompressOpts: any = { ...options };
       if ((options as any).dictionaryBase64) {
-        const dictBinaryString = atob((options as any).dictionaryBase64);
-        const dictBytes = new Uint8Array(dictBinaryString.length);
-        for (let i = 0; i < dictBinaryString.length; i++) {
-          dictBytes[i] = dictBinaryString.charCodeAt(i);
-        }
-        decompressOpts.dictionary = dictBytes;
+        // @ts-ignore
+        decompressOpts.dictionary = window.base64ToUint8Array((options as any).dictionaryBase64);
         delete decompressOpts.dictionaryBase64;
       }
       
       // @ts-ignore
       const result = await window.ZstdWasm.decompressStream(bytes, isFirstChunk, decompressOpts);
-      let binaryStr = '';
-      const chunkSize = 32768;
-      for (let i = 0; i < result.buf.length; i += chunkSize) {
-        const end = Math.min(i + chunkSize, result.buf.length);
-        for (let j = i; j < end; j++) {
-          binaryStr += String.fromCharCode(result.buf[j]);
-        }
-      }
       
       return {
-        buf: btoa(binaryStr),
+        // @ts-ignore
+        buf: window.uint8ArrayToBase64(result.buf),
         in_offset: result.in_offset
       };
     }, [base64, isFirst, serializedOpts]) as { buf: string; in_offset: number };

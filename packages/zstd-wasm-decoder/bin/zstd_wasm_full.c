@@ -36,160 +36,6 @@
  * ============================================================================
  */
 
-/* Debug and trace settings */
-#define DEBUGLEVEL 0
-#define ZSTD_NO_TRACE
-#define ZSTD_TRACE 0
-#define BACKTRACE_ENABLE 0
-
-/* Memory module settings */
-#define MEM_MODULE
-
-/* xxHash configuration */
-#undef  XXH_NAMESPACE
-#define XXH_NAMESPACE ZSTD_
-#undef  XXH_PRIVATE_API
-#define XXH_PRIVATE_API
-#undef  XXH_INLINE_ALL
-#define XXH_INLINE_ALL
-
-/* Feature exclusions - decoder only build */
-#define ZSTD_LIB_DECOMPRESSION
-#define ZSTD_LIB_COMPRESSION 0
-#define ZSTD_LIB_DICTBUILDER 0
-#define ZSTD_LIB_DEPRECATED 0
-#define ZSTD_LIB_EXCLUDE_COMPRESSORS_GREEDY_AND_UP
-#define ZSTD_LIB_EXCLUDE_COMPRESSORS_DFAST_AND_UP
-
-/* Legacy support */
-#define ZSTD_LEGACY_SUPPORT 0
-#define ZSTD_LEGACY_MULTITHREADED_API 0
-
-/* External dependencies */
-#define HAVE_ZLIB 0
-#define HAVE_LZMA 0
-#define HAVE_LZ4 0
-
-/* Assembly and CPU features */
-#define ZSTD_DISABLE_ASM 1
-#define ZSTD_ENABLE_ASM_X86_64_BMI2 0
-#define DYNAMIC_BMI2 0
-#define STATIC_BMI2 0
-
-/* Multithreading */
-#undef ZSTD_MULTITHREAD
-
-/* Optimization settings */
-#define HUF_FORCE_DECOMPRESS_X2
-#define ZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
-#define ZSTD_NO_UNUSED_FUNCTIONS
-#define ZSTD_STRIP_ERROR_STRINGS
-
-#include "stddef.h"
-#include "stdint.h"
-
-#define _size_t_bytes sizeof(size_t)
-
-size_t memory_size(void);
-
-#define WASM_EXPORT __attribute__((visibility("default")))
-
-
-#define STATBUF_BASE 8196
-#define STATBUF_IN  ((ZSTD_inBuffer*)STATBUF_BASE)
-#define STATBUF_OUT ((ZSTD_outBuffer*)(STATBUF_BASE+12))
-#define DCTX_ADDR 8220
-
-//ZSTD_DCtx* const dctx = (ZSTD_DCtx*) workspace;
-
-// Hard-code the pointer to the location in memory where heap cursor will be stored
-#define HEAP_TAIL_PTR ((size_t*)8192) 
-
-size_t memory_size(void) {
-    return __builtin_wasm_memory_size(0);
-}
-
-// Bump only. Reset in JS via prune_buf
-WASM_EXPORT
-void* malloc(size_t size) {
-    size_t ptr = *HEAP_TAIL_PTR;
-    *HEAP_TAIL_PTR = (*HEAP_TAIL_PTR + size);
-    return (void*)ptr;
-}
-
-void free(void* ptr) {
-    (void)ptr; // no-op
-}
-
-WASM_EXPORT
-void prune_buf(size_t new_size) {
-    *HEAP_TAIL_PTR = new_size;
-}
-
-void* calloc(size_t nmemb, size_t size) {
-    size_t total = nmemb * size;
-    void* ptr = malloc(total);
-    if (ptr) {
-        __builtin_memset(ptr, 0, total);
-    }
-    return ptr;
-}
-
-void* memcpy(void* dest, const void* src, size_t n) {
-    return __builtin_memcpy(dest, src, n);
-}
-
-void* memset(void* s, int c, size_t n) {
-    return __builtin_memset(s, c, n);
-}
-
-void* memmove(void* dest, const void* src, size_t n) {
-    return __builtin_memmove(dest, src, n);
-}
-
-// 97312 bytes of padding to push rodata to higher offset
-__attribute__((section(".rodata.A")))
-static char __pad[97312];
-
-#define ZSTD_DEPS_NEED_MALLOC
-#include "common/zstd_deps.h"
-
-#include "common/entropy_common.c"
-#include "common/fse_decompress.c"
-#include "common/zstd_common.c"
-
-#include "decompress/huf_decompress.c"
-#include "decompress/zstd_ddict.c"
-
-
-WASM_EXPORT
-void* A(void) {
-    return __pad;
-}
-
-#include "decompress/zstd_decompress.c"
-#include "decompress/zstd_decompress_block.c"
-
-static struct ZSTD_DCtx_s* const dctx = (struct ZSTD_DCtx_s*)DCTX_ADDR;
-
-/*
-    Inlined
-
-    ZSTD_DCtx_resetParameters
-*/
-static void zstd_reset(ZSTD_DCtx* dctx)
-{
-    dctx->streamStage = zdss_init;
-    dctx->noForwardProgress = 0;
-    dctx->isFrameDecompression = 1;
-    dctx->format = ZSTD_f_zstd1;
-    dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
-    dctx->outBufferMode = ZSTD_bm_buffered;
-    dctx->forceIgnoreChecksum = ZSTD_d_validateChecksum;
-    dctx->refMultipleDDicts = ZSTD_rmd_refSingleDDict;
-    dctx->disableHufAsm = 0;
-    dctx->maxBlockSizeParam = 0;
-}
 
 /* 
     In wasm, there is two possible memory layouts that we get out-of-the box
@@ -215,9 +61,6 @@ static void zstd_reset(ZSTD_DCtx* dctx)
         We don't ask for malloc and pointers, we just write data to predictable areas of memory,
         let zstd do its job, and flush to js.
         And neither, do we have to give up full control to the wasm module.
-    3.) Cache locality: fitting stack + in/out buf structs + heap ptr + dctx ptr into one cache line.
-    4.) Smaller pointers / constants that get inlined throughout the code, reducing codesize
-        (in both JS & wasm)
     
     Now the issue: The linker script / order of the data section seems to be ignored.
     
@@ -234,139 +77,229 @@ static void zstd_reset(ZSTD_DCtx* dctx)
                 Cursor
                         8196               8208                8220               8224        104028 
     
-    We have to put.
-
-    __attribute__((section(".rodata.A")))
-    static char __pad[97312];
-
-    before
-
-    * include common/zstd_deps.h
-
-    and
-
-    WASM_EXPORT
-    void* A(void) {
-        return __pad;
-    }
-
-    before
-
-    *include decompress/zstd_decompress
-    *include decompress/zstd_decompress_block
-    
-    which is just stub that does absolutely nothing, but we have to export though so its
-    not compiled away
-
-    So far, this seems the be only possible way to control the order.
-
-    this puts the actual constants at 8192 + 97312 = 105504
-    with 1476b space between dctx & .rodata
-
     The statically allocated dctx consumes about 96k bytes. The final number is rounded up,
     such that the constants for the access to those static data throughout the bytecode are
     better aligned & compressible.
 */
 
 
-/* 
-    Inlined
 
-    ZSTD_createDCtx_internal
-    ZSTD_initDCtx_internal
-*/
+/* xxHash configuration */
+#undef  XXH_NAMESPACE
+#define XXH_NAMESPACE ZSTD_
+#undef  XXH_PRIVATE_API
+#define XXH_PRIVATE_API
+#undef  XXH_INLINE_ALL
+#define XXH_INLINE_ALL
+
+#include "stddef.h"
+#include "stdint.h"
+#include <wasm_simd128.h>
+
+#define WASM_EXPORT __attribute__((visibility("default")))
+#define XXH_FORCE_MEMORY_ACCESS 2
+#include "common/zstd_deps.h"
+
+#include "common/entropy_common.c"
+#include "common/fse_decompress.c"
+#include "common/zstd_common.c"
+
+#include "decompress/huf_decompress.c"
+#include "decompress/zstd_ddict.c"
+
+typedef struct {
+    ZSTD_inBuffer in_buffer;
+    unsigned char pad[4];
+    ZSTD_outBuffer out_buffer;
+    unsigned char pad2[4];
+} __attribute__((aligned(32))) ZstdBufsObject;
+
+__attribute__((section(".rodata"))) // It is not read only, but the only way to have the compiler respect the order since linker scripts are not working.
+
+// Same for decompression context
+// Rationale: Keep writes as far away as possible from the dctx, and the vital pointer structs (those above)
+// __stack_pointer & __heap_cursor already "isolated" in global var -> cannot be overwritten through runtime code. Unless global.set is explicitly called.
+// The only places where this happens is malloc, or when stack ptr operations occur.
+static ZstdBufsObject ZstdBufs; 
+typedef struct {
+    ZSTD_DCtx dctx;
+} __attribute__((aligned(16))) ZstdPadObject;
+
+__attribute__((section(".rodata")))
+static ZstdPadObject ZstdPad;
+static ZSTD_DCtx* dctx = &ZstdPad.dctx;
+
+static struct ZSTD_DDict_s* ddict;
+static ZSTD_inBuffer* const in_buffer = (ZSTD_inBuffer*)&ZstdBufs.in_buffer;
+static ZSTD_outBuffer* const out_buffer = (ZSTD_outBuffer*)&ZstdBufs.out_buffer;
+
+// This is not exported in the final binary but prevents from the structs being put after .rodata.
 WASM_EXPORT
-void createDCtx(void) {
-    prune_buf(DCTX_ADDR);
-    dctx->customMem = ZSTD_defaultCMem;
-    dctx->staticSize  = 0;
-    dctx->ddict       = NULL;
-    dctx->ddictLocal  = NULL;
-    dctx->dictEnd     = NULL;
-    dctx->ddictIsCold = 0;
-    dctx->dictUses = ZSTD_dont_use;
-    dctx->inBuff      = NULL;
-    dctx->inBuffSize  = 0;
-    dctx->outBuffSize = 0;
-    dctx->oversizedDuration = 0;
-    dctx->ddictSet = NULL;
-    zstd_reset(dctx);
-    prune_buf(196608);
+void* getInBufferPtr(void) {
+    return (void*)in_buffer;
 }
 
+// Heap_cursor as internal mutable global with initialization
+extern unsigned char __heap_cursor;
+__asm__(
+    ".globaltype __heap_cursor, i32\n"
+    "__heap_cursor:\n"
+);
 
-/*
+#include "decompress/zstd_decompress.c"
+#include "decompress/zstd_decompress_block.c"
 
+// Bump only. Reset in JS via pb(ptr) "prune buf"
+// Global variables do not live in the linear memory of the wasm module, ruling out overflow into the cursor.
+// Also provides minor performance benefit as it compiles down to fewer instructions. (see comparison below)
 WASM_EXPORT
-void createDCtx(void) {
-    prune_buf(DCTX_ADDR);
-    dctx->customMem = ZSTD_defaultCMem;
-    dctx->staticSize  = 0;
-    dctx->ddict       = NULL;
-    dctx->ddictLocal  = NULL;
-    dctx->dictEnd     = NULL;
-    dctx->ddictIsCold = 0;
-    dctx->dictUses = ZSTD_dont_use;
-    dctx->inBuff      = NULL;
-    dctx->inBuffSize  = 0;
-    dctx->outBuffSize = 0;
+void* malloc(size_t size) {
+    size_t ptr;
+    __asm__(
+        "local.get %0\n"
+        "global.get __heap_cursor\n"
+        "local.tee %0\n"
+        "i32.add\n"
+        "global.set __heap_cursor\n"
+        : "=r"(ptr)
+        : "r"(size)
+    );
+    return (void*)ptr;
+}
+
+/* Wasmtime 21.0.1
+------------------------------
+
+    (module
+    (memory (export "memory") 0)
+    (global $__heap_cursor (mut i32) (i32.const 1024))
+    (func $malloc_global (export "malloc") (param $size i32) (result i32)
+        (local $ptr i32)
+        global.get $__heap_cursor
+        local.tee $ptr
+        local.get $size
+        i32.add
+        global.set $__heap_cursor
+        local.get $ptr
+    )
+    )
+
+    wasm[0]::function[0]:
+    pushq	%rbp
+    movq	%rsp, %rbp
+    movl	0x70(%rdi), %eax
+    addl	%eax, %edx
+    movl	%edx, 0x70(%rdi)
+    movq	%rbp, %rsp
+    popq	%rbp
+    retq
+
+    ------------------------------
+
+    (module
+    (memory (export "memory") 0)
+    (global $__heap_cursor (mut i32) (i32.const 1024))
+    (func $malloc_load_store (export "malloc2") (param $size i32) (result i32)
+        (local $ptr i32)
+        (local $new_cursor i32)
+        (local.set $ptr (i32.load (i32.const 0)))
+        (local.set $new_cursor (i32.add (local.get $ptr) (local.get $size)))
+        (i32.store (i32.const 0) (local.get $new_cursor))
+        (local.get $ptr)
+    )
+    )
+
+    wasm[0]::function[0]:
+    pushq	%rbp
+    movq	%rsp, %rbp
+    movq	0x60(%rdi), %r8
+    movl	(%r8), %eax
+    leal	(%rax,%rdx), %r9d
+    movl	%r9d, (%r8)
+    movq	%rbp, %rsp
+    popq	%rbp
+    retq
+
+    ------------------------------
+*/
+
+void* free(void* ptr) {
+    (void)ptr; // no-op
+}
+
+// This is not exported in the final binary but prevents from inline asm being "optimized" to i32.const + i32.load
+size_t get_heap_cursor(void) {
+    size_t cursor;
+    __asm__(
+        "global.get __heap_cursor\n"
+        : "=r"(cursor)
+    );
+    return cursor;
+}
+
+// Prune buffer to overwrite old data.
+WASM_EXPORT
+void pb(size_t new_size) {
+    __asm__(
+        "local.get %0\n"
+        "global.set __heap_cursor\n"
+        : 
+        : "r"(new_size)
+    );
+}
+
+void* calloc(size_t nmemb, size_t size) {
+    size_t total = nmemb * size;
+    void* ptr = malloc(total);
+    if (ptr) {
+        __builtin_memset(ptr, 0, total);
+    }
+    return ptr;
+}
+
+// Doing 2x i32.store is slightly faster for 64b.
+// The compiler doesn't inline anything though (no places where <=64b are written statically)
+// So at runtime the check is more expensive than just calling memcpy.
+void* memcpy(void* dest, const void* src, size_t n) {
+    return __builtin_memcpy(dest, src, n);
+}
+
+void* memset(void* s, int c, size_t n) {
+    return __builtin_memset(s, c, n);
+}
+
+void* memmove(void* dest, const void* src, size_t n) {
+    return __builtin_memmove(dest, src, n);
+}
+
+// Reset Decompression Context. The bare minimum that we need.
+WASM_EXPORT
+void re(void)
+{
     dctx->streamStage = zdss_init;
     dctx->noForwardProgress = 0;
-    dctx->oversizedDuration = 0;
     dctx->isFrameDecompression = 1;
-    dctx->ddictSet = NULL;
     dctx->format = ZSTD_f_zstd1;
+}
+
+// The ZSTD_createDctx, renamed to _initialize so the compiler understands that this is the entrypoint.
+// Those two values are the only ones that are set, the rest is zero initialized implicitly.
+// -> since we previously already reserved sufficient space for ZSTD_dctx.
+void _initialize(void) {
+    dctx->dictUses = ZSTD_use_indefinitely;
     dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
-    dctx->outBufferMode = ZSTD_bm_buffered;
-    dctx->forceIgnoreChecksum = ZSTD_d_validateChecksum;
-    dctx->refMultipleDDicts = ZSTD_rmd_refSingleDDict;
-    dctx->disableHufAsm = 0;
-    dctx->maxBlockSizeParam = 0;
-    prune_buf(196608);
+    pb(131072);
 }
-
-static void ZSTD_DCtx_resetParameters(ZSTD_DCtx* dctx)
-{
-    assert(dctx->streamStage == zdss_init);
-    dctx->format = ZSTD_f_zstd1;
-    dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
-    dctx->outBufferMode = ZSTD_bm_buffered;
-    dctx->forceIgnoreChecksum = ZSTD_d_validateChecksum;
-    dctx->refMultipleDDicts = ZSTD_rmd_refSingleDDict;
-    dctx->disableHufAsm = 0;
-    dctx->maxBlockSizeParam = 0;
-}
-WASM_EXPORT
-void createDCtx(void) {
-    prune_buf(DCTX_ADDR);
-    dctx->customMem = ZSTD_defaultCMem;
-    ZSTD_initDCtx_internal(dctx);
-    prune_buf(196608);
-}
-
-*/
-
 
 /*
-    Inlined 
-    ZSTD_createDDict_advanced
-    ZSTD_initDDict_internal
-    
-    Without malloc calls, and other operations & checks that we already do from js
+    Manually folded / inlined ZSTD_createDDict
 */
 WASM_EXPORT
-void* createDict(const void* dict, size_t dictSize) {
-    ZSTD_customMem const customMem = { NULL, NULL, NULL };
-    ZSTD_DDict* const ddict = (ZSTD_DDict*) malloc(sizeof(ZSTD_DDict));
-    ddict->cMem = customMem;
+void* cd(const void* dict, size_t dictSize) {
+    ddict = (ZSTD_DDict*) malloc(sizeof(ZSTD_DDict));
+    ddict->dictContent = dict;
     ddict->dictSize = dictSize;
     ddict->entropy.hufTable[0] = (HUF_DTable)((ZSTD_HUFFDTABLE_CAPACITY_LOG)*0x1000001);
-
-
-    ddict->dictBuffer = dict;
-    ddict->dictContent = dict;
-    //ZSTD_memcpy(internalBuffer, dict, dictSize);
-
     ddict->dictID = 0;
     ddict->entropyPresent = 0;
     U32 const magic = MEM_readLE32(ddict->dictContent);
@@ -376,219 +309,315 @@ void* createDict(const void* dict, size_t dictSize) {
             &ddict->entropy, ddict->dictContent, ddict->dictSize);
         ddict->entropyPresent = 1;
     }
+    dctx->ddict = ddict;
+}
+
+
+/*
+    Manually folded / inlined ZSTD_decompress_insertDictionary
+*/
+static size_t decompress_insertDictionary(const void* dict, size_t dictSize)
+{
+    if (dictSize < 8) return ZSTD_refDictContent(dctx, dict, dictSize);
+    {   U32 const magic = MEM_readLE32(dict);
+        if (magic != ZSTD_MAGIC_DICTIONARY) {
+            return ZSTD_refDictContent(dctx, dict, dictSize);   /* pure content mode */
+    }   }
+    dctx->dictID = MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
+
+    /* load entropy tables */
+    {   size_t const eSize = ZSTD_loadDEntropy(&dctx->entropy, dict, dictSize);
+        RETURN_ERROR_IF(ZSTD_isError(eSize), dictionary_corrupted, "");
+        dict = (const char*)dict + eSize;
+        dictSize -= eSize;
+    }
+    dctx->litEntropy = dctx->fseEntropy = 1;
+
+    /* reference dictionary content */
+    return ZSTD_refDictContent(dctx, dict, dictSize);
 }
 
 /*
-    Inlined    
+    Manually folded / inlined ZSTD_decompressBegin_usingDDict
+*/
+static size_t decompressBegin_usingDDict()
+{   
+    if (ddict) {
+        const char* const dictStart = (const char*)ddict->dictContent;
+        size_t const dictSize = ddict->dictSize;
+        const void* const dictEnd = dictStart + dictSize;
+        dctx->ddictIsCold = (dctx->dictEnd != dictEnd);
+    }
+    FORWARD_IF_ERROR( ZSTD_decompressBegin(dctx) , "");
+    if (ddict) {   /* NULL ddict is equivalent to no dictionary */
+        ZSTD_copyDDictParameters(dctx, ddict);
+    }
+    return 0;
+}
 
-    ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input)
+/*
+    Manually folded / inlined ZSTD_decompressMultiFrame
     
-    Removed static dctx check branch
+    dict case removed as never have undigest dictionaries.
+    so dict is always NULL.
+    if ddict is NULL. The function works exactly as the original.
+*/
+ZSTD_ALLOW_POINTER_OVERFLOW_ATTR
+static size_t dm(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
+{
+    void* const dststart = dst;
+    int moreThan1Frame = 0;
+    const void* dict = NULL;
+    size_t dictSize = 0;
+
+    if (ddict) {
+        dict = ddict->dictContent;
+        dictSize = ddict->dictSize;
+    }
+
+    while (srcSize >= ZSTD_startingInputLength(dctx->format)) {
+        if (dctx->format == ZSTD_f_zstd1 && srcSize >= 4) {
+            U32 const magicNumber = MEM_readLE32(src);
+            if ((magicNumber & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
+                /* skippable frame detected : skip it */
+                size_t const skippableSize = readSkippableFrameSize(src, srcSize);
+                FORWARD_IF_ERROR(skippableSize, "invalid skippable frame");
+                assert(skippableSize <= srcSize);
+
+                src = (const BYTE *)src + skippableSize;
+                srcSize -= skippableSize;
+                continue; /* check next frame */
+        }   }
+
+        if (ddict) {
+            /* we were called from ZSTD_decompress_usingDDict */
+            FORWARD_IF_ERROR(decompressBegin_usingDDict(), "");
+        } else {
+            /* this will initialize correctly with no dict if dict == NULL, so
+             * use this in all cases but ddict */
+            FORWARD_IF_ERROR(ZSTD_decompressBegin(dctx), "");
+            if (dict && dictSize)
+            RETURN_ERROR_IF(
+                ZSTD_isError(decompress_insertDictionary(dict, dictSize)),
+                dictionary_corrupted, "");
+        }
+        ZSTD_checkContinuity(dctx, dst, dstCapacity);
+
+        {   const size_t res = ZSTD_decompressFrame(dctx, dst, dstCapacity,
+                                                    &src, &srcSize);
+            RETURN_ERROR_IF(
+                (ZSTD_getErrorCode(res) == ZSTD_error_prefix_unknown)
+             && (moreThan1Frame==1),
+                srcSize_wrong,"");
+            if (ZSTD_isError(res)) return res;
+            assert(res <= dstCapacity);
+            if (res != 0)
+                dst = (BYTE*)dst + res;
+            dstCapacity -= res;
+        }
+        moreThan1Frame = 1;
+    }  /* while (srcSize >= ZSTD_frameHeaderSize_prefix) */
+
+    RETURN_ERROR_IF(srcSize, srcSize_wrong, "");
+
+    return (size_t)((BYTE*)dst - (BYTE*)dststart);
+}
+
+
+/*
+    Manually folded / inlined ZSTD_decompress_usingDDict > MultiFrame
 */
 WASM_EXPORT
-size_t decStream(void) {
-    ZSTD_DStream* zds = dctx;
-    ZSTD_inBuffer* input = STATBUF_IN;
-    ZSTD_outBuffer* output = STATBUF_OUT;
-    const char* const src = (const char*)input->src;
-    const char* const istart = input->pos != 0 ? src + input->pos : src;
-    const char* const iend = input->size != 0 ? src + input->size : src;
+size_t dS(void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
+    return dm(dst, dstCapacity, src, srcSize);
+}
+
+/*
+    Manually folded / inlined
+
+    ZSTD_decompressStream(ZSTD_DCtx* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input)
+    
+    Removed static dctx check branch, and bunch of other stuff that the compiler is too shy to optimize away.
+*/
+WASM_EXPORT
+size_t ds(void) {
+    const char* const src = (const char*)in_buffer->src;
+    const char* const istart = in_buffer->pos != 0 ? src + in_buffer->pos : src;
+    const char* const iend = in_buffer->size != 0 ? src + in_buffer->size : src;
     const char* ip = istart;
-    char* const dst = (char*)output->dst;
-    char* const ostart = output->pos != 0 ? dst + output->pos : dst;
-    char* const oend = output->size != 0 ? dst + output->size : dst;
+    char* const dst = (char*)out_buffer->dst;
+    char* const ostart = out_buffer->pos != 0 ? dst + out_buffer->pos : dst;
+    char* const oend = out_buffer->size != 0 ? dst + out_buffer->size : dst;
     char* op = ostart;
     U32 someMoreWork = 1;
-    assert(zds != NULL);
     RETURN_ERROR_IF(
-        input->pos > input->size,
+        in_buffer->pos > in_buffer->size,
         srcSize_wrong,
         "forbidden. in: pos: %u   vs size: %u",
-        (U32)input->pos, (U32)input->size);
+        (U32)in_buffer->pos, (U32)in_buffer->size);
     RETURN_ERROR_IF(
-        output->pos > output->size,
+        out_buffer->pos > out_buffer->size,
         dstSize_tooSmall,
         "forbidden. out: pos: %u   vs size: %u",
-        (U32)output->pos, (U32)output->size);
-    FORWARD_IF_ERROR(ZSTD_checkOutBuffer(zds, output), "");
+        (U32)out_buffer->pos, (U32)out_buffer->size);
 
     while (someMoreWork) {
-        switch(zds->streamStage)
+        switch(dctx->streamStage)
         {
         case zdss_init :
-            zds->streamStage = zdss_loadHeader;
-            zds->lhSize = zds->inPos = zds->outStart = zds->outEnd = 0;
-            zds->hostageByte = 0;
-            zds->expectedOutBuffer = *output;
+            dctx->streamStage = zdss_loadHeader;
+            dctx->lhSize = dctx->inPos = dctx->outStart = dctx->outEnd = 0;
+            dctx->hostageByte = 0;
+            dctx->expectedOutBuffer = *out_buffer;
             ZSTD_FALLTHROUGH;
 
         case zdss_loadHeader :
-            {   size_t const hSize = ZSTD_getFrameHeader_advanced(&zds->fParams, zds->headerBuffer, zds->lhSize, zds->format);
-                if (zds->refMultipleDDicts && zds->ddictSet) {
-                    ZSTD_DCtx_selectFrameDDict(zds);
-                }
+            {   size_t const hSize = ZSTD_getFrameHeader_advanced(&dctx->fParams, dctx->headerBuffer, dctx->lhSize, dctx->format);
                 if (ZSTD_isError(hSize)) {
                     return hSize;   /* error */
                 }
                 if (hSize != 0) {   /* need more input */
-                    size_t const toLoad = hSize - zds->lhSize;   /* if hSize!=0, hSize > zds->lhSize */
+                    size_t const toLoad = hSize - dctx->lhSize;   /* if hSize!=0, hSize > dctx->lhSize */
                     size_t const remainingInput = (size_t)(iend-ip);
                     assert(iend >= ip);
                     if (toLoad > remainingInput) {   /* not enough input to load full header */
                         if (remainingInput > 0) {
-                            ZSTD_memcpy(zds->headerBuffer + zds->lhSize, ip, remainingInput);
-                            zds->lhSize += remainingInput;
+                            ZSTD_memcpy(dctx->headerBuffer + dctx->lhSize, ip, remainingInput);
+                            dctx->lhSize += remainingInput;
                         }
-                        input->pos = input->size;
+                        in_buffer->pos = in_buffer->size;
                         /* check first few bytes */
                         FORWARD_IF_ERROR(
-                            ZSTD_getFrameHeader_advanced(&zds->fParams, zds->headerBuffer, zds->lhSize, zds->format),
+                            ZSTD_getFrameHeader_advanced(&dctx->fParams, dctx->headerBuffer, dctx->lhSize, dctx->format),
                             "First few bytes detected incorrect" );
                         /* return hint input size */
-                        return (MAX((size_t)ZSTD_FRAMEHEADERSIZE_MIN(zds->format), hSize) - zds->lhSize) + ZSTD_blockHeaderSize;   /* remaining header bytes + next block header */
+                        return (MAX((size_t)ZSTD_FRAMEHEADERSIZE_MIN(dctx->format), hSize) - dctx->lhSize) + ZSTD_blockHeaderSize;   /* remaining header bytes + next block header */
                     }
-                    assert(ip != NULL);
-                    ZSTD_memcpy(zds->headerBuffer + zds->lhSize, ip, toLoad); zds->lhSize = hSize; ip += toLoad;
+                    ZSTD_memcpy(dctx->headerBuffer + dctx->lhSize, ip, toLoad); dctx->lhSize = hSize; ip += toLoad;
                     break;
             }   }
 
             /* check for single-pass mode opportunity */
-            if (zds->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
-                && zds->fParams.frameType != ZSTD_skippableFrame
-                && (U64)(size_t)(oend-op) >= zds->fParams.frameContentSize) {
-                size_t const cSize = ZSTD_findFrameCompressedSize_advanced(istart, (size_t)(iend-istart), zds->format);
+            if (dctx->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
+                && dctx->fParams.frameType != ZSTD_skippableFrame
+                && (U64)(size_t)(oend-op) >= dctx->fParams.frameContentSize) {
+                size_t const cSize = ZSTD_findFrameCompressedSize_advanced(istart, (size_t)(iend-istart), dctx->format);
+                
                 if (cSize <= (size_t)(iend-istart)) {
                     /* shortcut : using single-pass mode */
-                    size_t const decompressedSize = ZSTD_decompress_usingDDict(zds, op, (size_t)(oend-op), istart, cSize, ZSTD_getDDict(zds));
+                    size_t const decompressedSize = dm(op, (size_t)(oend-op), istart, cSize);
                     if (ZSTD_isError(decompressedSize)) return decompressedSize;
-                    assert(istart != NULL);
                     ip = istart + cSize;
                     op = op ? op + decompressedSize : op; /* can occur if frameContentSize = 0 (empty frame) */
-                    zds->expected = 0;
-                    zds->streamStage = zdss_init;
+                    dctx->expected = 0;
+                    dctx->streamStage = zdss_init;
                     someMoreWork = 0;
                     break;
             }   }
 
-            /* Check output buffer is large enough for ZSTD_odm_stable. */
-            if (zds->outBufferMode == ZSTD_bm_stable
-                && zds->fParams.frameType != ZSTD_skippableFrame
-                && zds->fParams.frameContentSize != ZSTD_CONTENTSIZE_UNKNOWN
-                && (U64)(size_t)(oend-op) < zds->fParams.frameContentSize) {
-                RETURN_ERROR(dstSize_tooSmall, "ZSTD_obm_stable passed but ZSTD_outBuffer is too small");
-            }
-
             /* Consume header (see ZSTDds_decodeFrameHeader) */
-            FORWARD_IF_ERROR(ZSTD_decompressBegin_usingDDict(zds, ZSTD_getDDict(zds)), "");
+            FORWARD_IF_ERROR(decompressBegin_usingDDict(), "");
 
-            if (zds->format == ZSTD_f_zstd1
-                && (MEM_readLE32(zds->headerBuffer) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {  /* skippable frame */
-                zds->expected = MEM_readLE32(zds->headerBuffer + ZSTD_FRAMEIDSIZE);
-                zds->stage = ZSTDds_skipFrame;
+            if (dctx->format == ZSTD_f_zstd1
+                && (MEM_readLE32(dctx->headerBuffer) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {  /* skippable frame */
+                dctx->expected = MEM_readLE32(dctx->headerBuffer + ZSTD_FRAMEIDSIZE);
+                dctx->stage = ZSTDds_skipFrame;
             } else {
-                FORWARD_IF_ERROR(ZSTD_decodeFrameHeader(zds, zds->headerBuffer, zds->lhSize), "");
-                zds->expected = ZSTD_blockHeaderSize;
-                zds->stage = ZSTDds_decodeBlockHeader;
+                FORWARD_IF_ERROR(ZSTD_decodeFrameHeader(dctx, dctx->headerBuffer, dctx->lhSize), "");
+                dctx->expected = ZSTD_blockHeaderSize;
+                dctx->stage = ZSTDds_decodeBlockHeader;
             }
 
             /* control buffer memory usage */
-            zds->fParams.windowSize = MAX(zds->fParams.windowSize, 1U << ZSTD_WINDOWLOG_ABSOLUTEMIN);
-            RETURN_ERROR_IF(zds->fParams.windowSize > zds->maxWindowSize,
+            dctx->fParams.windowSize = MAX(dctx->fParams.windowSize, 1U << ZSTD_WINDOWLOG_ABSOLUTEMIN);
+            RETURN_ERROR_IF(dctx->fParams.windowSize > dctx->maxWindowSize,
                             frameParameter_windowTooLarge, "");
-            if (zds->maxBlockSizeParam != 0)
-                zds->fParams.blockSizeMax = MIN(zds->fParams.blockSizeMax, (unsigned)zds->maxBlockSizeParam);
+            if (dctx->maxBlockSizeParam != 0)
+                dctx->fParams.blockSizeMax = MIN(dctx->fParams.blockSizeMax, (unsigned)dctx->maxBlockSizeParam);
 
             /* Adapt buffer sizes to frame header instructions */
-            {   size_t const neededInBuffSize = MAX(zds->fParams.blockSizeMax, 4 /* frame checksum */);
-                size_t const neededOutBuffSize = zds->outBufferMode == ZSTD_bm_buffered
-                        ? ZSTD_decodingBufferSize_internal(zds->fParams.windowSize, zds->fParams.frameContentSize, zds->fParams.blockSizeMax)
-                        : 0;
+            {   size_t const neededInBuffSize = MAX(dctx->fParams.blockSizeMax, 4 /* frame checksum */);
+                size_t const neededOutBuffSize = ZSTD_decodingBufferSize_internal(dctx->fParams.windowSize, dctx->fParams.frameContentSize, dctx->fParams.blockSizeMax);
+                
+                if ((dctx->inBuffSize + dctx->outBuffSize) >= (neededInBuffSize + neededOutBuffSize) * ZSTD_WORKSPACETOOLARGE_FACTOR)
+                    dctx->oversizedDuration++;
+                else
+                    dctx->oversizedDuration = 0;
 
-                ZSTD_DCtx_updateOversizedDuration(zds, neededInBuffSize, neededOutBuffSize);
+                {   int const needsResize = (dctx->inBuffSize < neededInBuffSize) ||
+                                            (dctx->outBuffSize < neededOutBuffSize) ||
+                                            (dctx->oversizedDuration >= ZSTD_WORKSPACETOOLARGE_MAXDURATION);
 
-                {   int const tooSmall = (zds->inBuffSize < neededInBuffSize) || (zds->outBuffSize < neededOutBuffSize);
-                    int const tooLarge = ZSTD_DCtx_isOversizedTooLong(zds);
-
-                    if (tooSmall || tooLarge) {
+                    if (needsResize) {
                         size_t const bufferSize = neededInBuffSize + neededOutBuffSize;
-                        DEBUGLOG(4, "inBuff  : from %u to %u",
-                                    (U32)zds->inBuffSize, (U32)neededInBuffSize);
-                        DEBUGLOG(4, "outBuff : from %u to %u",
-                                    (U32)zds->outBuffSize, (U32)neededOutBuffSize);
-                        ZSTD_customFree(zds->inBuff, zds->customMem);
-                        zds->inBuffSize = 0;
-                        zds->outBuffSize = 0;
-                        zds->inBuff = (char*)ZSTD_customMalloc(bufferSize, zds->customMem);
-                        RETURN_ERROR_IF(zds->inBuff == NULL, memory_allocation, "");
-                        zds->inBuffSize = neededInBuffSize;
-                        zds->outBuff = zds->inBuff + zds->inBuffSize;
-                        zds->outBuffSize = neededOutBuffSize;
+                        dctx->inBuffSize = 0;
+                        dctx->outBuffSize = 0;
+                        dctx->inBuff = (char*)ZSTD_customMalloc(bufferSize, dctx->customMem);
+                        RETURN_ERROR_IF(dctx->inBuff == NULL, memory_allocation, "");
+                        dctx->inBuffSize = neededInBuffSize;
+                        dctx->outBuff = dctx->inBuff + dctx->inBuffSize;
+                        dctx->outBuffSize = neededOutBuffSize;
             }   }   }
-            zds->streamStage = zdss_read;
+            dctx->streamStage = zdss_read;
             ZSTD_FALLTHROUGH;
 
         case zdss_read:
-            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompressWithInputSize(zds, (size_t)(iend - ip));
+            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompressWithInputSize(dctx, (size_t)(iend - ip));
                 if (neededInSize==0) {  /* end of frame */
-                    zds->streamStage = zdss_init;
+                    dctx->streamStage = zdss_init;
                     someMoreWork = 0;
                     break;
                 }
                 if ((size_t)(iend-ip) >= neededInSize) {  /* decode directly from src */
-                    FORWARD_IF_ERROR(ZSTD_decompressContinueStream(zds, &op, oend, ip, neededInSize), "");
-                    assert(ip != NULL);
+                    FORWARD_IF_ERROR(ZSTD_decompressContinueStream(dctx, &op, oend, ip, neededInSize), "");
                     ip += neededInSize;
                     /* Function modifies the stage so we must break */
                     break;
             }   }
             if (ip==iend) { someMoreWork = 0; break; }   /* no more input */
-            zds->streamStage = zdss_load;
+            dctx->streamStage = zdss_load;
             ZSTD_FALLTHROUGH;
 
         case zdss_load:
-            {   size_t const neededInSize = ZSTD_nextSrcSizeToDecompress(zds);
-                size_t const toLoad = neededInSize - zds->inPos;
-                int const isSkipFrame = ZSTD_isSkipFrame(zds);
+            {   size_t const neededInSize = dctx->expected;
+                size_t const toLoad = neededInSize - dctx->inPos;
                 size_t loadedSize;
                 /* At this point we shouldn't be decompressing a block that we can stream. */
-                assert(neededInSize == ZSTD_nextSrcSizeToDecompressWithInputSize(zds, (size_t)(iend - ip)));
-                if (isSkipFrame) {
+                assert(neededInSize == ZSTD_nextSrcSizeToDecompressWithInputSize(dctx, (size_t)(iend - ip)));
+                if (dctx->stage == ZSTDds_skipFrame) {
                     loadedSize = MIN(toLoad, (size_t)(iend-ip));
                 } else {
-                    RETURN_ERROR_IF(toLoad > zds->inBuffSize - zds->inPos,
+                    RETURN_ERROR_IF(toLoad > dctx->inBuffSize - dctx->inPos,
                                     corruption_detected,
                                     "should never happen");
-                    loadedSize = ZSTD_limitCopy(zds->inBuff + zds->inPos, toLoad, ip, (size_t)(iend-ip));
+                    loadedSize = ZSTD_limitCopy(dctx->inBuff + dctx->inPos, toLoad, ip, (size_t)(iend-ip));
                 }
                 if (loadedSize != 0) {
                     /* ip may be NULL */
                     ip += loadedSize;
-                    zds->inPos += loadedSize;
+                    dctx->inPos += loadedSize;
                 }
                 if (loadedSize < toLoad) { someMoreWork = 0; break; }   /* not enough input, wait for more */
 
                 /* decode loaded input */
-                zds->inPos = 0;   /* input is consumed */
-                FORWARD_IF_ERROR(ZSTD_decompressContinueStream(zds, &op, oend, zds->inBuff, neededInSize), "");
+                dctx->inPos = 0;   /* input is consumed */
+                FORWARD_IF_ERROR(ZSTD_decompressContinueStream(dctx, &op, oend, dctx->inBuff, neededInSize), "");
                 /* Function modifies the stage so we must break */
                 break;
             }
         case zdss_flush:
             {
-                size_t const toFlushSize = zds->outEnd - zds->outStart;
-                size_t const flushedSize = ZSTD_limitCopy(op, (size_t)(oend-op), zds->outBuff + zds->outStart, toFlushSize);
+                size_t const toFlushSize = dctx->outEnd - dctx->outStart;
+                size_t const flushedSize = ZSTD_limitCopy(op, (size_t)(oend-op), dctx->outBuff + dctx->outStart, toFlushSize);
 
                 op = op ? op + flushedSize : op;
 
-                zds->outStart += flushedSize;
+                dctx->outStart += flushedSize;
                 if (flushedSize == toFlushSize) {  /* flush completed */
-                    zds->streamStage = zdss_read;
-                    if ( (zds->outBuffSize < zds->fParams.frameContentSize)
-                        && (zds->outStart + zds->fParams.blockSizeMax > zds->outBuffSize) ) {
-                        DEBUGLOG(5, "restart filling outBuff from beginning (left:%i, needed:%u)",
-                                (int)(zds->outBuffSize - zds->outStart),
-                                (U32)zds->fParams.blockSizeMax);
-                        zds->outStart = zds->outEnd = 0;
+                    dctx->streamStage = zdss_read;
+                    if ( (dctx->outBuffSize < dctx->fParams.frameContentSize)
+                        && (dctx->outStart + dctx->fParams.blockSizeMax > dctx->outBuffSize) ) {
+                        dctx->outStart = dctx->outEnd = 0;
                     }
                     break;
             }   }
@@ -602,66 +631,44 @@ size_t decStream(void) {
     }   }
 
     /* result */
-    input->pos = (size_t)(ip - (const char*)(input->src));
-    output->pos = (size_t)(op - (char*)(output->dst));
+    in_buffer->pos = (size_t)(ip - (const char*)(in_buffer->src));
+    out_buffer->pos = (size_t)(op - (char*)(out_buffer->dst));
 
     /* Update the expected output buffer for ZSTD_obm_stable. */
-    zds->expectedOutBuffer = *output;
+    dctx->expectedOutBuffer = *out_buffer;
 
     if ((ip==istart) && (op==ostart)) {  /* no forward progress */
-        zds->noForwardProgress ++;
-        if (zds->noForwardProgress >= ZSTD_NO_FORWARD_PROGRESS_MAX) {
+        dctx->noForwardProgress ++;
+        if (dctx->noForwardProgress >= ZSTD_NO_FORWARD_PROGRESS_MAX) {
             RETURN_ERROR_IF(op==oend, noForwardProgress_destFull, "");
             RETURN_ERROR_IF(ip==iend, noForwardProgress_inputEmpty, "");
             assert(0);
         }
     } else {
-        zds->noForwardProgress = 0;
+        dctx->noForwardProgress = 0;
     }
-    {   size_t nextSrcSizeHint = ZSTD_nextSrcSizeToDecompress(zds);
+    {   size_t nextSrcSizeHint = dctx->expected;
         if (!nextSrcSizeHint) {   /* frame fully decoded */
-            if (zds->outEnd == zds->outStart) {  /* output fully flushed */
-                if (zds->hostageByte) {
-                    if (input->pos >= input->size) {
+            if (dctx->outEnd == dctx->outStart) {  /* output fully flushed */
+                if (dctx->hostageByte) {
+                    if (in_buffer->pos >= in_buffer->size) {
                         /* can't release hostage (not present) */
-                        zds->streamStage = zdss_read;
+                        dctx->streamStage = zdss_read;
                         return 1;
                     }
-                    input->pos++;  /* release hostage */
-                }   /* zds->hostageByte */
+                    in_buffer->pos++;  /* release hostage */
+                }   /* dctx->hostageByte */
                 return 0;
-            }  /* zds->outEnd == zds->outStart */
-            if (!zds->hostageByte) { /* output not fully flushed; keep last byte as hostage; will be released when all output is flushed */
-                input->pos--;   /* note : pos > 0, otherwise, impossible to finish reading last block */
-                zds->hostageByte=1;
+            }  /* dctx->outEnd == dctx->outStart */
+            if (!dctx->hostageByte) { /* output not fully flushed; keep last byte as hostage; will be released when all output is flushed */
+                in_buffer->pos--;   /* note : pos > 0, otherwise, impossible to finish reading last block */
+                dctx->hostageByte=1;
             }
             return 1;
         }  /* nextSrcSizeHint==0 */
-        nextSrcSizeHint += ZSTD_blockHeaderSize * (ZSTD_nextInputType(zds) == ZSTDnit_block);   /* preload header of next block */
-        assert(zds->inPos <= nextSrcSizeHint);
-        nextSrcSizeHint -= zds->inPos;   /* part already loaded*/
+        nextSrcSizeHint += ZSTD_blockHeaderSize * (ZSTD_nextInputType(dctx) == ZSTDnit_block);   /* preload header of next block */
+        assert(dctx->inPos <= nextSrcSizeHint);
+        nextSrcSizeHint -= dctx->inPos;   /* part already loaded*/
         return nextSrcSizeHint;
-    }
-}
-
-WASM_EXPORT
-size_t decompressSync(void* dst, size_t dstCapacity, 
-                      const void* src, size_t srcSize, const void* ddict) {
-    return ZSTD_decompress_usingDDict(dctx, dst, dstCapacity, src, srcSize, (const ZSTD_DDict*)ddict);
-}
-
-WASM_EXPORT
-void reset(void) {
-    zstd_reset(dctx);
-}
-
-WASM_EXPORT
-void refDict(const void* ddict) {
-    dctx->ddictLocal = NULL;
-    dctx->ddict = NULL;
-    dctx->dictUses = ZSTD_dont_use;
-    if (ddict) {
-        dctx->ddict = ddict;
-        dctx->dictUses = ZSTD_use_indefinitely;
     }
 }

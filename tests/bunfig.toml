@@ -1,9 +1,0 @@
-[test]
-timeout = 30000
-root = "."
-
-coverage = false
-coverageDir = "./coverage"
-coverageReporter = ["text", "lcov"]
-
-coverageSkipTestFiles = true

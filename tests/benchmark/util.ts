@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import * as zlib from 'node:zlib';
+import { slice } from '../lib/utils.js';
 
 export const loadCompressedFiles = (dir: string) =>
   readdirSync(dir).filter(f => f.endsWith('.zst')).map(f => readFileSync(join(dir, f)));
@@ -68,7 +69,7 @@ const collectWS = (url: string, name: string, stopSignal: () => boolean): Promis
           try {
             const data = typeof e.data === 'string' ? Buffer.from(e.data) : Buffer.from(e.data);
             if (data[0] === 0x89) {
-              ws.send(Buffer.from([0x8A, ...data.slice(1)]));
+              ws.send(Buffer.from([0x8A, ...slice(data, 1)]));
               return;
             }
             msgs.push(compress(detectDecompress(data)));

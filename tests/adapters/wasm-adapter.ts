@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import { decompress, createDecoder } from '../../packages/zstd-wasm-decoder/src/_esm/index.node.js';
 import type { ZstdOptions, ZstdDecoder } from '../../packages/zstd-wasm-decoder/src/types.js';
+import { slice } from '../lib/utils.js';
 
 export interface WasmDecoderAdapter {
   decompress(data: Buffer | Uint8Array, options?: ZstdOptions): Promise<Buffer>;
@@ -33,7 +34,7 @@ export const wasmDecoder = {
       const offset = i * chunkSize;
       if (offset >= compressed.length) break;
       const result = decoder.decompressStream(
-        compressed.slice(offset, Math.min(offset + chunkSize, compressed.length)), 
+        slice(compressed, offset, Math.min(offset + chunkSize, compressed.length)), 
         i === 0 && isFirst
       );
       if (result?.buf?.length > 0) outputChunks.push(Buffer.from(result.buf));
@@ -43,7 +44,7 @@ export const wasmDecoder = {
   }
 };
 
-export async function initWasmAdapter(dictionaries: Record<string, Buffer | Uint8Array> = {}): Promise<void> {
+export async function initWasmAdapter(): Promise<void> {
   await createDecoder();
 }
 

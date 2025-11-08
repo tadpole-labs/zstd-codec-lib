@@ -8,36 +8,32 @@ export interface BaseWasmExports {
   /** Allocate memory in the WASM module */
   malloc(size: number): number;
   /** Prune the buffer to a new size */
-  prune_buf(new_size: number): void;
+  pb(new_size: number): void;
 }
 
-/**
+/*
  * Decoder specific exported functions.
  */
 export interface DecoderWasmExports extends BaseWasmExports {
   /** Creates a ZSTD decompression context */
-  createDCtx(): void;
+  _initialize(): void;
 
   /** Creates a ZSTD dictionary for decompression */
-  createDict(dictPtr: number, dictSize: number): number;
+  cd(dictPtr: number, dictSize: number): number;
   
   /** Decompresses data synchronously */
-  decompressSync(
+  dS(
     dstPtr: number,
     dstCapacity: number,
     srcPtr: number,
-    srcSize: number,
-    ddict: number
+    srcSize: number
   ): number;
   
   /** Decompresses a stream of data */
-  decStream(): number;
+  ds(): number;
   
   /** Resets the decompression context */
-  reset(): number;
-  
-  /** References a dictionary in the decompression context */
-  refDict(ddict: number): number;
+  re(): number;
 }
 
 /**

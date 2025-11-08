@@ -1,8 +1,12 @@
-tests/benchmark/compressed/*.zst
-tests/data/*.json
-/zstd
 node_modules
-packages/zstd-wasm-decoder/src/build
+
+*.tgz
+*.js.map
+*.d.ts.map
+/packages/zstd-wasm-decoder/build
+
+/tests/benchmark/compressed/*.zst
+/tests/data/*.json
 
 *.dll
 *.so

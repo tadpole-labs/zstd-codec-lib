@@ -12,14 +12,13 @@ import {
   constants
 } from 'node:zlib';
 
-interface CompressionOptions {
-  level?: number;
+type DecompressionOptions = {
   dictionary?: Buffer | Uint8Array;
-}
+};
 
-interface DecompressionOptions {
-  dictionary?: Buffer | Uint8Array;
-}
+type CompressionOptions = DecompressionOptions & {
+  level?: number;
+};
 
 export interface ZstdAdapter {
   compress(data: Buffer | Uint8Array, options?: CompressionOptions): Buffer;
