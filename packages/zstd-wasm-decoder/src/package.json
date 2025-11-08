@@ -77,7 +77,6 @@
   "files": [
     "*.ts",
     "*.d.ts",
-    "!*.test.ts",
     "_esm/**/*.js",
     "_esm/**/*.wasm",
     "_types/**/*.d.ts",
