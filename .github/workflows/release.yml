@@ -118,9 +118,15 @@ jobs:
         env:
           CC: clang
 
+      - name: Install Playwright browsers
+        run: pnpm run ci:postinstall:browsers
+
       - name: Build
         run: |
           pnpm run build:ts:prep
+
+      - name: Test (Release builds)
+        run: pnpm run test:release
 
       - name: Pack & publish with provenance
         working-directory: ${{ env.PACKAGE_DIR }}
