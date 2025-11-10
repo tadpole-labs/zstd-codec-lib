@@ -4,7 +4,7 @@
 export interface BaseWasmExports {
   /** WebAssembly linear memory */
   memory: WebAssembly.Memory;
-  
+
   /** Allocate memory in the WASM module */
   malloc(size: number): number;
   /** Prune the buffer to a new size */
@@ -20,18 +20,13 @@ export interface DecoderWasmExports extends BaseWasmExports {
 
   /** Creates a ZSTD dictionary for decompression */
   cd(dictPtr: number, dictSize: number): number;
-  
+
   /** Decompresses data synchronously */
-  dS(
-    dstPtr: number,
-    dstCapacity: number,
-    srcPtr: number,
-    srcSize: number
-  ): number;
-  
+  dS(dstPtr: number, dstCapacity: number, srcPtr: number, srcSize: number): number;
+
   /** Decompresses a stream of data */
   ds(): number;
-  
+
   /** Resets the decompression context */
   re(): number;
 }
@@ -42,12 +37,12 @@ export interface DecoderWasmExports extends BaseWasmExports {
 export interface DecoderOptions {
   /** Dictionary to use for decompression */
   dictionary?: Uint8Array;
-  
+
   /** Maximum (compressed) buffer size in bytes */
-  maxSrcSize?: number = 0;
-  
+  maxSrcSize?: number;
+
   /** Maximum (decompressed) buffer size in bytes */
-  maxDstSize?: number = 0;
+  maxDstSize?: number;
 }
 
 /**
@@ -56,7 +51,7 @@ export interface DecoderOptions {
 export interface ZstdOptions {
   /** Dictionary to use for decompression */
   dictionary?: Uint8Array | ArrayBuffer | Request | string;
-  
+
   /** Path to the WASM module */
   wasmPath?: string;
 }
@@ -67,50 +62,7 @@ export interface ZstdOptions {
 export interface StreamResult {
   /** Decompressed output buffer */
   buf: Uint8Array;
-  
+
   /** Offset into the input buffer indicating how much was consumed */
   in_offset: number;
-}
-
-/**
- * Decoder class for decompressing ZSTD-compressed data.
- */
-export declare class ZstdDecoder {
-  /**
-   * Creates a new ZSTD decoder instance.
-   * 
-   * @param options - Decoder configuration options
-   */
-  constructor(options?: DecoderOptions);
-  
-  /**
-   * Initializes the decoder WebAssembly module.
-   * 
-   * @param wasmModule - Compiled WebAssembly module
-   * @returns Returns the initialized decoder
-   */
-  init(wasmModule: WebAssembly.Module): Promise<ZstdDecoder>;
-  
-  /**
-   * Decompresses data synchronously.
-   * 
-   * @param compressedData - ZSTD compressed data
-   * @param expectedSize - Expected size of the decompressed data
-   * @returns Decompressed data
-   */
-  decompressSync(compressedData: Uint8Array, expectedSize?: number): Uint8Array;
-  
-  /**
-   * Decompresses data using the streaming API.
-   * 
-   * @param input - Chunk of compressed data
-   * @param reset - Whether to reset the decompression context
-   * @returns Stream result with decompressed buffer and offset metadata
-   */
-  decompressStream(input: Uint8Array, reset?: boolean): StreamResult;
-  
-  /**
-   * Cleans up decoder resources.
-   */
-  destroy(): void;
 }

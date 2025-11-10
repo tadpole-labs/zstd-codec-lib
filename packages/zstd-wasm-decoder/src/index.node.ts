@@ -1,13 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { _internal } from './shared.js';
-import { readFileSync } from 'fs';
 
-export { 
-  ZstdDecoder,
+// biome-ignore lint/performance/noBarrelFile: entrypoint module
+export {
   createDecoder,
-  ZstdDecompressionStream,
   decompress,
   decompressStream,
-  decompressSync
+  decompressSync,
+  ZstdDecoder,
+  ZstdDecompressionStream,
 } from './shared.js';
 
 export type { DecoderOptions, StreamResult } from './types.js';

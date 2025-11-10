@@ -71,11 +71,12 @@
                             
                              4b srcPtr         4b srcPtr
                                 4b size            4b size     
-                                   4b pos              4b pos                          Dctx
-    Stack        Heap        ZSTD_inBuffer*    ZSTD_outBuffer*          ptr            95804b       Heap
-    0 <--- 8192         --->               --->                --->   ZSTD_DCtx*       --->         Data
+                                   4b pos             4b pos
+                                      4b pad             4b pad                Dctx
+    Stack        Heap        ZSTD_inBuffer*    ZSTD_outBuffer*                 95804b       Heap
+    0 <--- 8192         --->               --->                --->            Data
                 Cursor
-                        8196               8208                8220               8224        104028 
+                        8192               8208                8224            8224        104028 
     
     The statically allocated dctx consumes about 96k bytes. The final number is rounded up,
     such that the constants for the access to those static data throughout the bytecode are
@@ -344,10 +345,33 @@ typedef signed long long int64_t;
 #endif
 
 /* detects whether we are being compiled under msan */
+#ifndef ZSTD_MEMORY_SANITIZER
+#  if __has_feature(memory_sanitizer)
+#    define ZSTD_MEMORY_SANITIZER 1
+#  else
+#    define ZSTD_MEMORY_SANITIZER 0
+#  endif
+#endif
 
 /* detects whether we are being compiled under asan */
+#ifndef ZSTD_ADDRESS_SANITIZER
+#  if __has_feature(address_sanitizer)
+#    define ZSTD_ADDRESS_SANITIZER 1
+#  elif defined(__SANITIZE_ADDRESS__)
+#    define ZSTD_ADDRESS_SANITIZER 1
+#  else
+#    define ZSTD_ADDRESS_SANITIZER 0
+#  endif
+#endif
 
 /* detects whether we are being compiled under dfsan */
+#ifndef ZSTD_DATAFLOW_SANITIZER
+# if __has_feature(dataflow_sanitizer)
+#  define ZSTD_DATAFLOW_SANITIZER 1
+# else
+#  define ZSTD_DATAFLOW_SANITIZER 0
+# endif
+#endif
 
 /* Mark the internal assembly functions as hidden  */
 #ifdef __ELF__
@@ -399,7 +423,13 @@ typedef signed long long int64_t;
  */
 #if defined(__GNUC__)
 #  if defined(__linux__) || defined(__linux) || defined(__APPLE__) || defined(_WIN32)
-#define ZSTD_ASM_SUPPORTED 1
+#    if ZSTD_MEMORY_SANITIZER
+#      define ZSTD_ASM_SUPPORTED 0
+#    elif ZSTD_DATAFLOW_SANITIZER
+#      define ZSTD_ASM_SUPPORTED 0
+#    else
+#      define ZSTD_ASM_SUPPORTED 1
+#    endif
 #  else
 #    define ZSTD_ASM_SUPPORTED 0
 #  endif
@@ -418,7 +448,14 @@ typedef signed long long int64_t;
  *   - DYNAMIC_BMI2 is enabled
  *   - BMI2 is supported at compile time
  */
-#define ZSTD_ENABLE_ASM_X86_64_BMI2 0
+#if !defined(ZSTD_DISABLE_ASM) &&                                 \
+    ZSTD_ASM_SUPPORTED &&                                         \
+    defined(__x86_64__) &&                                        \
+    (DYNAMIC_BMI2 || defined(__BMI2__))
+# define ZSTD_ENABLE_ASM_X86_64_BMI2 1
+#else
+# define ZSTD_ENABLE_ASM_X86_64_BMI2 0
+#endif
 
 /*
  * For x86 ELF targets, add .note.gnu.property section for Intel CET in
@@ -524,7 +561,7 @@ typedef signed long long int64_t;
 #  define MEM_STATIC static __inline UNUSED_ATTR
 #elif defined(__IAR_SYSTEMS_ICC__)
 #  define MEM_STATIC static inline UNUSED_ATTR
-#elif (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
+#elif defined (__cplusplus) || (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
 #  define MEM_STATIC static inline
 #elif defined(_MSC_VER)
 #  define MEM_STATIC static __inline
@@ -666,7 +703,11 @@ typedef signed long long int64_t;
 /* Only use C++ attributes in C++. Some compilers report support for C++
  * attributes when compiling with C.
  */
-#define ZSTD_HAS_CPP_ATTRIBUTE(x) 0
+#if defined(__cplusplus) && defined(__has_cpp_attribute)
+# define ZSTD_HAS_CPP_ATTRIBUTE(x) __has_cpp_attribute(x)
+#else
+# define ZSTD_HAS_CPP_ATTRIBUTE(x) 0
+#endif
 
 /* Define ZSTD_FALLTHROUGH macro for annotating switch case with the 'fallthrough' attribute.
  * - C23: https://en.cppreference.com/w/c/language/attributes/fallthrough
@@ -821,7 +862,68 @@ unsigned char* ZSTD_maybeNullPtrAdd(unsigned char* ptr, ptrdiff_t add)
 #endif
 #endif
 
+#if ZSTD_MEMORY_SANITIZER && !defined(ZSTD_MSAN_DONT_POISON_WORKSPACE)
+/* Not all platforms that support msan provide sanitizers/msan_interface.h.
+ * We therefore declare the functions we need ourselves, rather than trying to
+ * include the header file... */
+#include <stddef.h>  /* size_t */
+#define ZSTD_DEPS_NEED_STDINT
+/**** skipping file: zstd_deps.h ****/
 
+/* Make memory region fully initialized (without changing its contents). */
+void __msan_unpoison(const volatile void *a, size_t size);
+
+/* Make memory region fully uninitialized (without changing its contents).
+   This is a legacy interface that does not update origin information. Use
+   __msan_allocated_memory() instead. */
+void __msan_poison(const volatile void *a, size_t size);
+
+/* Returns the offset of the first (at least partially) poisoned byte in the
+   memory range, or -1 if the whole range is good. */
+intptr_t __msan_test_shadow(const volatile void *x, size_t size);
+
+/* Print shadow and origin for the memory range to stderr in a human-readable
+   format. */
+void __msan_print_shadow(const volatile void *x, size_t size);
+#endif
+
+#if ZSTD_ADDRESS_SANITIZER && !defined(ZSTD_ASAN_DONT_POISON_WORKSPACE)
+/* Not all platforms that support asan provide sanitizers/asan_interface.h.
+ * We therefore declare the functions we need ourselves, rather than trying to
+ * include the header file... */
+#include <stddef.h>  /* size_t */
+
+/**
+ * Marks a memory region (<c>[addr, addr+size)</c>) as unaddressable.
+ *
+ * This memory must be previously allocated by your program. Instrumented
+ * code is forbidden from accessing addresses in this region until it is
+ * unpoisoned. This function is not guaranteed to poison the entire region -
+ * it could poison only a subregion of <c>[addr, addr+size)</c> due to ASan
+ * alignment restrictions.
+ *
+ * \note This function is not thread-safe because no two threads can poison or
+ * unpoison memory in the same memory region simultaneously.
+ *
+ * \param addr Start of memory region.
+ * \param size Size of memory region. */
+void __asan_poison_memory_region(void const volatile *addr, size_t size);
+
+/**
+ * Marks a memory region (<c>[addr, addr+size)</c>) as addressable.
+ *
+ * This memory must be previously allocated by your program. Accessing
+ * addresses in this region is allowed until this region is poisoned again.
+ * This function could unpoison a super-region of <c>[addr, addr+size)</c> due
+ * to ASan alignment restrictions.
+ *
+ * \note This function is not thread-safe because no two threads can
+ * poison or unpoison memory in the same memory region simultaneously.
+ *
+ * \param addr Start of memory region.
+ * \param size Size of memory region. */
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#endif
 
 #endif /* ZSTD_COMPILER_H */
 /**** ended inlining compiler.h ****/
@@ -870,6 +972,9 @@ unsigned char* ZSTD_maybeNullPtrAdd(unsigned char* ptr, ptrdiff_t add)
 /* DEBUGLEVEL is expected to be defined externally,
  * typically through compiler command line.
  * Value must be a number. */
+#ifndef DEBUGLEVEL
+#  define DEBUGLEVEL 0
+#endif
 
 
 /* recommended values for DEBUGLEVEL :
@@ -1048,9 +1153,9 @@ MEM_STATIC unsigned MEM_64bits(void) { return sizeof(size_t)==8; }
 
 MEM_STATIC unsigned MEM_isLittleEndian(void)
 {
-#if defined(__ORDER_LITTLE_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
     return 1;
-#elif defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+#elif defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     return 0;
 #elif defined(__clang__) && __LITTLE_ENDIAN__
     return 1;
@@ -1305,8 +1410,12 @@ MEM_STATIC void MEM_check(void) { DEBUG_STATIC_ASSERT((sizeof(size_t)==4) || (si
 #ifndef ZSTD_ERRORS_H_398273423
 #define ZSTD_ERRORS_H_398273423
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 /* =====   ZSTDERRORLIB_API : control library symbols visibility   ===== */
+#ifndef ZSTDERRORLIB_VISIBLE
    /* Backwards compatibility with old macro name */
 #  ifdef ZSTDERRORLIB_VISIBILITY
 #    define ZSTDERRORLIB_VISIBLE ZSTDERRORLIB_VISIBILITY
@@ -1315,6 +1424,7 @@ MEM_STATIC void MEM_check(void) { DEBUG_STATIC_ASSERT((sizeof(size_t)==4) || (si
 #  else
 #    define ZSTDERRORLIB_VISIBLE
 #  endif
+#endif
 
 #ifndef ZSTDERRORLIB_HIDDEN
 #  if defined(__GNUC__) && (__GNUC__ >= 4) && !defined(__MINGW32__)
@@ -1324,7 +1434,13 @@ MEM_STATIC void MEM_check(void) { DEBUG_STATIC_ASSERT((sizeof(size_t)==4) || (si
 #  endif
 #endif
 
-#define ZSTDERRORLIB_API ZSTDERRORLIB_VISIBLE
+#if defined(ZSTD_DLL_EXPORT) && (ZSTD_DLL_EXPORT==1)
+#  define ZSTDERRORLIB_API __declspec(dllexport) ZSTDERRORLIB_VISIBLE
+#elif defined(ZSTD_DLL_IMPORT) && (ZSTD_DLL_IMPORT==1)
+#  define ZSTDERRORLIB_API __declspec(dllimport) ZSTDERRORLIB_VISIBLE /* It isn't required but allows to generate better code, saving a function pointer load from the IAT and an indirect jump.*/
+#else
+#  define ZSTDERRORLIB_API ZSTDERRORLIB_VISIBLE
+#endif
 
 /*-*********************************************
  *  Error codes list
@@ -1383,6 +1499,9 @@ typedef enum {
 ZSTDERRORLIB_API const char* ZSTD_getErrorString(ZSTD_ErrorCode code);   /**< Same as ZSTD_getErrorName, but using a `ZSTD_ErrorCode` enum argument */
 
 
+#if defined (__cplusplus)
+}
+#endif
 
 #endif /* ZSTD_ERRORS_H_398273423 */
 /**** ended inlining ../zstd_errors.h ****/
@@ -1395,7 +1514,7 @@ ZSTDERRORLIB_API const char* ZSTD_getErrorString(ZSTD_ErrorCode code);   /**< Sa
 ******************************************/
 #if defined(__GNUC__)
 #  define ERR_STATIC static __attribute__((unused))
-#elif (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
+#elif defined (__cplusplus) || (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
 #  define ERR_STATIC static inline
 #elif defined(_MSC_VER)
 #  define ERR_STATIC static __inline
@@ -1754,7 +1873,7 @@ If there is an error, the function will return an error code, which can be teste
 #endif  /* FSE_H */
 
 
-#if !defined(FSE_H_FSE_STATIC_LINKING_ONLY)
+#if defined(FSE_STATIC_LINKING_ONLY) && !defined(FSE_H_FSE_STATIC_LINKING_ONLY)
 #define FSE_H_FSE_STATIC_LINKING_ONLY
 /**** start inlining bitstream.h ****/
 /* ******************************************************************
@@ -4049,6 +4168,9 @@ MEM_STATIC ZSTD_cpuid_t ZSTD_cpuid(void) {
 #include <limits.h>   /* INT_MAX */
 #endif /* ZSTD_STATIC_LINKING_ONLY */
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 /* =====   ZSTDLIB_API : control library symbols visibility   ===== */
 #ifndef ZSTDLIB_VISIBLE
@@ -4062,8 +4184,21 @@ MEM_STATIC ZSTD_cpuid_t ZSTD_cpuid(void) {
 #  endif
 #endif
 
+#ifndef ZSTDLIB_HIDDEN
+#  if defined(__GNUC__) && (__GNUC__ >= 4) && !defined(__MINGW32__)
+#    define ZSTDLIB_HIDDEN __attribute__ ((visibility ("hidden")))
+#  else
+#    define ZSTDLIB_HIDDEN
+#  endif
+#endif
 
-#define ZSTDLIB_API ZSTDLIB_VISIBLE
+#if defined(ZSTD_DLL_EXPORT) && (ZSTD_DLL_EXPORT==1)
+#  define ZSTDLIB_API __declspec(dllexport) ZSTDLIB_VISIBLE
+#elif defined(ZSTD_DLL_IMPORT) && (ZSTD_DLL_IMPORT==1)
+#  define ZSTDLIB_API __declspec(dllimport) ZSTDLIB_VISIBLE /* It isn't required but allows to generate better code, saving a function pointer load from the IAT and an indirect jump.*/
+#else
+#  define ZSTDLIB_API ZSTDLIB_VISIBLE
+#endif
 
 /* Deprecation warnings :
  * Should these warnings be a problem, it is generally possible to disable them,
@@ -4073,7 +4208,9 @@ MEM_STATIC ZSTD_cpuid_t ZSTD_cpuid(void) {
 #ifdef ZSTD_DISABLE_DEPRECATE_WARNINGS
 #  define ZSTD_DEPRECATED(message) /* disable deprecation warnings */
 #else
-#  if (defined(GNUC) && (GNUC > 4 || (GNUC == 4 && GNUC_MINOR >= 5))) || defined(__clang__) || defined(__IAR_SYSTEMS_ICC__)
+#  if defined (__cplusplus) && (__cplusplus >= 201402) /* C++14 or greater */
+#    define ZSTD_DEPRECATED(message) [[deprecated(message)]]
+#  elif (defined(GNUC) && (GNUC > 4 || (GNUC == 4 && GNUC_MINOR >= 5))) || defined(__clang__) || defined(__IAR_SYSTEMS_ICC__)
 #    define ZSTD_DEPRECATED(message) __attribute__((deprecated(message)))
 #  elif defined(__GNUC__) && (__GNUC__ >= 3)
 #    define ZSTD_DEPRECATED(message) __attribute__((deprecated))
@@ -5221,6 +5358,9 @@ ZSTDLIB_API size_t ZSTD_sizeof_DStream(const ZSTD_DStream* zds);
 ZSTDLIB_API size_t ZSTD_sizeof_CDict(const ZSTD_CDict* cdict);
 ZSTDLIB_API size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict);
 
+#if defined (__cplusplus)
+}
+#endif
 
 #endif  /* ZSTD_H_235446 */
 
@@ -5237,10 +5377,19 @@ ZSTDLIB_API size_t ZSTD_sizeof_DDict(const ZSTD_DDict* ddict);
 #if !defined(ZSTD_H_ZSTD_STATIC_LINKING_ONLY)
 #define ZSTD_H_ZSTD_STATIC_LINKING_ONLY
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 /* This can be overridden externally to hide static symbols. */
 #ifndef ZSTDLIB_STATIC_API
-#define ZSTDLIB_STATIC_API ZSTDLIB_VISIBLE
+#  if defined(ZSTD_DLL_EXPORT) && (ZSTD_DLL_EXPORT==1)
+#    define ZSTDLIB_STATIC_API __declspec(dllexport) ZSTDLIB_VISIBLE
+#  elif defined(ZSTD_DLL_IMPORT) && (ZSTD_DLL_IMPORT==1)
+#    define ZSTDLIB_STATIC_API __declspec(dllimport) ZSTDLIB_VISIBLE
+#  else
+#    define ZSTDLIB_STATIC_API ZSTDLIB_VISIBLE
+#  endif
 #endif
 
 /****************************************************************************************
@@ -7190,12 +7339,18 @@ ZSTDLIB_STATIC_API size_t ZSTD_decompressBlock(ZSTD_DCtx* dctx, void* dst, size_
 ZSTD_DEPRECATED("The block API is deprecated in favor of the normal compression API. See docs.")
 ZSTDLIB_STATIC_API size_t ZSTD_insertBlock    (ZSTD_DCtx* dctx, const void* blockStart, size_t blockSize);  /**< insert uncompressed block into `dctx` history. Useful for multi-blocks decompression. */
 
+#if defined (__cplusplus)
+}
+#endif
 
 #endif   /* ZSTD_H_ZSTD_STATIC_LINKING_ONLY */
 /**** ended inlining ../zstd.h ****/
 #define FSE_STATIC_LINKING_ONLY
 /**** skipping file: fse.h ****/
 /**** skipping file: huf.h ****/
+#ifndef XXH_STATIC_LINKING_ONLY
+#  define XXH_STATIC_LINKING_ONLY  /* XXH64_state_t */
+#endif
 /**** start inlining xxhash.h ****/
 /*
  * xxHash - Extremely Fast Hash algorithm
@@ -7515,7 +7670,7 @@ ZSTDLIB_STATIC_API size_t ZSTD_insertBlock    (ZSTD_DCtx* dctx, const void* bloc
 #  undef XXH_PUBLIC_API
 #  if defined(__GNUC__)
 #    define XXH_PUBLIC_API static __inline __attribute__((unused))
-#  elif (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
+#  elif defined (__cplusplus) || (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
 #    define XXH_PUBLIC_API static inline
 #  elif defined(_MSC_VER)
 #    define XXH_PUBLIC_API static __inline
@@ -7732,6 +7887,9 @@ ZSTDLIB_STATIC_API size_t ZSTD_insertBlock    (ZSTD_DCtx* dctx, const void* bloc
 /*! @brief Version number, encoded as two digits each */
 #define XXH_VERSION_NUMBER  (XXH_VERSION_MAJOR *100*100 + XXH_VERSION_MINOR *100 + XXH_VERSION_RELEASE)
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /*!
  * @brief Obtains the xxHash version.
  *
@@ -7742,6 +7900,9 @@ ZSTDLIB_STATIC_API size_t ZSTD_insertBlock    (ZSTD_DCtx* dctx, const void* bloc
  */
 XXH_PUBLIC_API XXH_CONSTF unsigned XXH_versionNumber (void);
 
+#if defined (__cplusplus)
+}
+#endif
 
 /* ****************************
 *  Common basic types
@@ -7788,6 +7949,9 @@ typedef uint32_t XXH32_hash_t;
 #   endif
 #endif
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 /*!
  * @}
@@ -7981,7 +8145,11 @@ XXH_PUBLIC_API XXH_PUREF XXH32_hash_t XXH32_hashFromCanonical(const XXH32_canoni
 /*! @endcond */
 
 /*! @cond Doxygen ignores this part */
-#define XXH_HAS_CPP_ATTRIBUTE(x) 0
+#if defined(__cplusplus) && defined(__has_cpp_attribute)
+# define XXH_HAS_CPP_ATTRIBUTE(x) __has_cpp_attribute(x)
+#else
+# define XXH_HAS_CPP_ATTRIBUTE(x) 0
+#endif
 /*! @endcond */
 
 /*! @cond Doxygen ignores this part */
@@ -8013,6 +8181,9 @@ XXH_PUBLIC_API XXH_PUREF XXH32_hash_t XXH32_hashFromCanonical(const XXH32_canoni
 #endif
 /*! @endcond */
 
+#if defined (__cplusplus)
+} /* end of extern "C" */
+#endif
 
 /*!
  * @}
@@ -8051,6 +8222,9 @@ typedef uint64_t XXH64_hash_t;
 #  endif
 #endif
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /*!
  * @}
  *
@@ -8755,6 +8929,9 @@ XXH_PUBLIC_API XXH_PUREF XXH128_hash_t XXH128_hashFromCanonical(XXH_NOESCAPE con
 
 #endif  /* !XXH_NO_XXH3 */
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 #endif  /* XXH_NO_LONG_LONG */
 
@@ -8765,7 +8942,7 @@ XXH_PUBLIC_API XXH_PUREF XXH128_hash_t XXH128_hashFromCanonical(XXH_NOESCAPE con
 
 
 
-#if !defined(XXHASH_H_STATIC_13879238742)
+#if defined(XXH_STATIC_LINKING_ONLY) && !defined(XXHASH_H_STATIC_13879238742)
 #define XXHASH_H_STATIC_13879238742
 /* ****************************************************************************
  * This section contains declarations which are not guaranteed to remain stable.
@@ -8830,6 +9007,9 @@ struct XXH64_state_s {
 
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L) /* >= C11 */
 #  include <stdalign.h>
+#  define XXH_ALIGN(n)      alignas(n)
+#elif defined(__cplusplus) && (__cplusplus >= 201103L) /* >= C++11 */
+/* In C++ alignas() is a keyword */
 #  define XXH_ALIGN(n)      alignas(n)
 #elif defined(__GNUC__)
 #  define XXH_ALIGN(n)      __attribute__ ((aligned(n)))
@@ -8939,6 +9119,9 @@ struct XXH3_state_s {
     } while(0)
 
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 /*!
  * @brief Calculates the 128-bit hash of @p data using XXH3.
@@ -9155,6 +9338,9 @@ XXH3_128bits_reset_withSecretandSeed(XXH_NOESCAPE XXH3_state_t* statePtr,
                                      XXH64_hash_t seed64);
 #endif /* !XXH_NO_STREAM */
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 #endif  /* !XXH_NO_XXH3 */
 #endif  /* XXH_NO_LONG_LONG */
@@ -9410,14 +9596,32 @@ XXH3_128bits_reset_withSecretandSeed(XXH_NOESCAPE XXH3_state_t* statePtr,
 #  endif
 #endif
 
+#ifndef XXH_SIZE_OPT
+   /* default to 1 for -Os or -Oz */
+#  if (defined(__GNUC__) || defined(__clang__)) && defined(__OPTIMIZE_SIZE__)
+#    define XXH_SIZE_OPT 1
+#  else
+#    define XXH_SIZE_OPT 0
+#  endif
+#endif
 
 #ifndef XXH_FORCE_ALIGN_CHECK  /* can be defined externally */
    /* don't check on sizeopt, x86, aarch64, or arm when unaligned access is available */
-#define XXH_FORCE_ALIGN_CHECK 1
+#  if XXH_SIZE_OPT >= 1 || \
+      defined(__i386)  || defined(__x86_64__) || defined(__aarch64__) || defined(__ARM_FEATURE_UNALIGNED) \
+   || defined(_M_IX86) || defined(_M_X64)     || defined(_M_ARM64)    || defined(_M_ARM) /* visual */
+#    define XXH_FORCE_ALIGN_CHECK 0
+#  else
+#    define XXH_FORCE_ALIGN_CHECK 1
+#  endif
 #endif
 
 #ifndef XXH_NO_INLINE_HINTS
-#define XXH_NO_INLINE_HINTS 0
+#  if XXH_SIZE_OPT >= 1 || defined(__NO_INLINE__)  /* -O0, -fno-inline */
+#    define XXH_NO_INLINE_HINTS 1
+#  else
+#    define XXH_NO_INLINE_HINTS 0
+#  endif
 #endif
 
 #ifndef XXH3_INLINE_SECRET
@@ -9458,10 +9662,16 @@ XXH3_128bits_reset_withSecretandSeed(XXH_NOESCAPE XXH3_state_t* statePtr,
  * without access to dynamic allocation.
  */
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 static XXH_CONSTF void* XXH_malloc(size_t s) { (void)s; return NULL; }
 static void XXH_free(void* p) { (void)p; }
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 #else
 
@@ -9471,6 +9681,9 @@ static void XXH_free(void* p) { (void)p; }
  */
 #include <stdlib.h>
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /*!
  * @internal
  * @brief Modify this function to use a different routine than malloc().
@@ -9483,9 +9696,15 @@ static XXH_MALLOCF void* XXH_malloc(size_t s) { return malloc(s); }
  */
 static void XXH_free(void* p) { free(p); }
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 #endif  /* XXH_NO_STDLIB */
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /*!
  * @internal
  * @brief Modify this function to use a different routine than memcpy().
@@ -9495,6 +9714,9 @@ static void* XXH_memcpy(void* dest, const void* src, size_t size)
     return memcpy(dest,src,size);
 }
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 /* *************************************
 *  Compiler Specific Options
@@ -9517,6 +9739,10 @@ static void* XXH_memcpy(void* dest, const void* src, size_t size)
 #elif defined(_MSC_VER)  /* Visual Studio */
 #  define XXH_FORCE_INLINE static __forceinline
 #  define XXH_NO_INLINE static __declspec(noinline)
+#elif defined (__cplusplus) \
+  || (defined (__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L))   /* C99 */
+#  define XXH_FORCE_INLINE static inline
+#  define XXH_NO_INLINE static
 #else
 #  define XXH_FORCE_INLINE static
 #  define XXH_NO_INLINE static
@@ -9541,7 +9767,11 @@ static void* XXH_memcpy(void* dest, const void* src, size_t size)
  * compiler's command line options. The value must be a number.
  */
 #ifndef XXH_DEBUGLEVEL
-#define XXH_DEBUGLEVEL DEBUGLEVEL
+#  ifdef DEBUGLEVEL /* backwards compat */
+#    define XXH_DEBUGLEVEL DEBUGLEVEL
+#  else
+#    define XXH_DEBUGLEVEL 0
+#  endif
 #endif
 
 #if (XXH_DEBUGLEVEL>=1)
@@ -9559,6 +9789,8 @@ static void* XXH_memcpy(void* dest, const void* src, size_t size)
 #ifndef XXH_STATIC_ASSERT
 #  if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)    /* C11 */
 #    define XXH_STATIC_ASSERT_WITH_MESSAGE(c,m) do { _Static_assert((c),m); } while(0)
+#  elif defined(__cplusplus) && (__cplusplus >= 201103L)            /* C++11 */
+#    define XXH_STATIC_ASSERT_WITH_MESSAGE(c,m) do { static_assert((c),m); } while(0)
 #  else
 #    define XXH_STATIC_ASSERT_WITH_MESSAGE(c,m) do { struct xxh_sa { char x[(c) ? 1 : -1]; }; } while(0)
 #  endif
@@ -9619,6 +9851,9 @@ typedef XXH32_hash_t xxh_u32;
 #  define U32  xxh_u32
 #endif
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 /* ***   Memory access   *** */
 
@@ -10776,6 +11011,9 @@ XXH_PUBLIC_API XXH64_hash_t XXH64_hashFromCanonical(XXH_NOESCAPE const XXH64_can
     return XXH_readBE64(src);
 }
 
+#if defined (__cplusplus)
+}
+#endif
 
 #ifndef XXH_NO_XXH3
 
@@ -10992,6 +11230,32 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
 #  define XXH_SVE    6
 #endif
 
+#ifndef XXH_VECTOR    /* can be defined on command line */
+#  if defined(__ARM_FEATURE_SVE)
+#    define XXH_VECTOR XXH_SVE
+#  elif ( \
+        defined(__ARM_NEON__) || defined(__ARM_NEON) /* gcc */ \
+     || defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC) /* msvc */ \
+     || (defined(__wasm_simd128__) && XXH_HAS_INCLUDE(<arm_neon.h>)) /* wasm simd128 via SIMDe */ \
+   ) && ( \
+        defined(_WIN32) || defined(__LITTLE_ENDIAN__) /* little endian only */ \
+    || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) \
+   )
+#    define XXH_VECTOR XXH_NEON
+#  elif defined(__AVX512F__)
+#    define XXH_VECTOR XXH_AVX512
+#  elif defined(__AVX2__)
+#    define XXH_VECTOR XXH_AVX2
+#  elif defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && (_M_IX86_FP == 2))
+#    define XXH_VECTOR XXH_SSE2
+#  elif (defined(__PPC64__) && defined(__POWER8_VECTOR__)) \
+     || (defined(__s390x__) && defined(__VEC__)) \
+     && defined(__GNUC__) /* TODO: IBM XL */
+#    define XXH_VECTOR XXH_VSX
+#  else
+#    define XXH_VECTOR XXH_SCALAR
+#  endif
+#endif
 
 /* __ARM_FEATURE_SVE is only supported by GCC & Clang. */
 #if (XXH_VECTOR == XXH_SVE) && !defined(__ARM_FEATURE_SVE)
@@ -11008,6 +11272,25 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
  * Controls the alignment of the accumulator,
  * for compatibility with aligned vector loads, which are usually faster.
  */
+#ifndef XXH_ACC_ALIGN
+#  if defined(XXH_X86DISPATCH)
+#     define XXH_ACC_ALIGN 64  /* for compatibility with avx512 */
+#  elif XXH_VECTOR == XXH_SCALAR  /* scalar */
+#     define XXH_ACC_ALIGN 8
+#  elif XXH_VECTOR == XXH_SSE2  /* sse2 */
+#     define XXH_ACC_ALIGN 16
+#  elif XXH_VECTOR == XXH_AVX2  /* avx2 */
+#     define XXH_ACC_ALIGN 32
+#  elif XXH_VECTOR == XXH_NEON  /* neon */
+#     define XXH_ACC_ALIGN 16
+#  elif XXH_VECTOR == XXH_VSX   /* vsx */
+#     define XXH_ACC_ALIGN 16
+#  elif XXH_VECTOR == XXH_AVX512  /* avx512 */
+#     define XXH_ACC_ALIGN 64
+#  elif XXH_VECTOR == XXH_SVE   /* sve */
+#     define XXH_ACC_ALIGN 64
+#  endif
+#endif
 
 #if defined(XXH_X86DISPATCH) || XXH_VECTOR == XXH_SSE2 \
     || XXH_VECTOR == XXH_AVX2 || XXH_VECTOR == XXH_AVX512
@@ -11052,6 +11335,9 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
 #  pragma GCC optimize("-O2")
 #endif
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 
 #if XXH_VECTOR == XXH_NEON
 
@@ -11175,6 +11461,9 @@ XXH_vmlal_high_u32(uint64x2_t acc, uint32x4_t lhs, uint32x4_t rhs)
 # endif
 #endif  /* XXH_VECTOR == XXH_NEON */
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 /*
  * VSX and Z Vector helpers.
@@ -11237,6 +11526,9 @@ typedef xxh_u64x2 xxh_aliasing_u64x2 XXH_ALIASING;
 #  if defined(__POWER9_VECTOR__) || (defined(__clang__) && defined(__s390x__))
 #    define XXH_vec_revb vec_revb
 #  else
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /*!
  * A polyfill for POWER9's vec_revb().
  */
@@ -11246,9 +11538,15 @@ XXH_FORCE_INLINE xxh_u64x2 XXH_vec_revb(xxh_u64x2 val)
                                   0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08 };
     return vec_perm(val, val, vByteSwap);
 }
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 #  endif
 # endif /* XXH_VSX_BE */
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /*!
  * Performs an unaligned vector load and byte swaps it on big endian.
  */
@@ -11294,6 +11592,9 @@ XXH_FORCE_INLINE xxh_u64x2 XXH_vec_mule(xxh_u32x4 a, xxh_u32x4 b)
 }
 # endif /* XXH_vec_mulo, XXH_vec_mule */
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 #endif /* XXH_VECTOR == XXH_VSX */
 
@@ -11313,8 +11614,24 @@ do { \
 
 /* prefetch
  * can be disabled, by declaring XXH_NO_PREFETCH build macro */
-#define XXH_PREFETCH(ptr)  (void)(ptr)  /* disabled */
+#if defined(XXH_NO_PREFETCH)
+#  define XXH_PREFETCH(ptr)  (void)(ptr)  /* disabled */
+#else
+#  if XXH_SIZE_OPT >= 1
+#    define XXH_PREFETCH(ptr) (void)(ptr)
+#  elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))  /* _mm_prefetch() not defined outside of x86/x64 */
+#    include <mmintrin.h>   /* https://msdn.microsoft.com/fr-fr/library/84szxsww(v=vs.90).aspx */
+#    define XXH_PREFETCH(ptr)  _mm_prefetch((const char*)(ptr), _MM_HINT_T0)
+#  elif defined(__GNUC__) && ( (__GNUC__ >= 4) || ( (__GNUC__ == 3) && (__GNUC_MINOR__ >= 1) ) )
+#    define XXH_PREFETCH(ptr)  __builtin_prefetch((ptr), 0 /* rw==read */, 3 /* locality */)
+#  else
+#    define XXH_PREFETCH(ptr) (void)(ptr)  /* disabled */
+#  endif
+#endif  /* XXH_NO_PREFETCH */
 
+#if defined (__cplusplus)
+extern "C" {
+#endif
 /* ==========================================
  * XXH3 default settings
  * ========================================== */
@@ -11735,6 +12052,14 @@ XXH3_len_17to128_64b(const xxh_u8* XXH_RESTRICT input, size_t len,
     XXH_ASSERT(16 < len && len <= 128);
 
     {   xxh_u64 acc = len * XXH_PRIME64_1;
+#if XXH_SIZE_OPT >= 1
+        /* Smaller and cleaner, but slightly slower. */
+        unsigned int i = (unsigned int)(len - 1) / 32;
+        do {
+            acc += XXH3_mix16B(input+16 * i, secret+32*i, seed);
+            acc += XXH3_mix16B(input+len-16*(i+1), secret+32*i+16, seed);
+        } while (i-- != 0);
+#else
         if (len > 32) {
             if (len > 64) {
                 if (len > 96) {
@@ -11749,6 +12074,7 @@ XXH3_len_17to128_64b(const xxh_u8* XXH_RESTRICT input, size_t len,
         }
         acc += XXH3_mix16B(input+0, secret+0, seed);
         acc += XXH3_mix16B(input+len-16, secret+16, seed);
+#endif
         return XXH3_avalanche(acc);
     }
 }
@@ -12279,6 +12605,7 @@ XXH3_accumulate_512_neon( void* XXH_RESTRICT acc,
         uint8_t const* xsecret  = (const uint8_t *) secret;
 
         size_t i;
+#ifdef __wasm_simd128__
         /*
          * On WASM SIMD128, Clang emits direct address loads when XXH3_kSecret
          * is constant propagated, which results in it converting it to this
@@ -12297,6 +12624,7 @@ XXH3_accumulate_512_neon( void* XXH_RESTRICT acc,
          * about a kilobyte and improves performance.
          */
         XXH_COMPILER_GUARD(xsecret);
+#endif
         /* Scalar lanes use the normal scalarRound routine */
         for (i = XXH3_NEON_LANES; i < XXH_ACC_NB; i++) {
             XXH3_scalarRound(acc, input, secret, i);
@@ -12401,6 +12729,12 @@ XXH3_scrambleAcc_neon(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret)
 
         size_t i;
         /* WASM uses operator overloads and doesn't need these. */
+#ifndef __wasm_simd128__
+        /* { prime32_1, prime32_1 } */
+        uint32x2_t const kPrimeLo = vdup_n_u32(XXH_PRIME32_1);
+        /* { 0, prime32_1, 0, prime32_1 } */
+        uint32x4_t const kPrimeHi = vreinterpretq_u32_u64(vdupq_n_u64((xxh_u64)XXH_PRIME32_1 << 32));
+#endif
 
         /* AArch64 uses both scalar and neon at the same time */
         for (i = XXH3_NEON_LANES; i < XXH_ACC_NB; i++) {
@@ -12416,8 +12750,27 @@ XXH3_scrambleAcc_neon(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret)
             uint64x2_t key_vec  = XXH_vld1q_u64(xsecret + (i * 16));
             uint64x2_t data_key = veorq_u64(data_vec, key_vec);
             /* xacc[i] *= XXH_PRIME32_1 */
+#ifdef __wasm_simd128__
             /* SIMD128 has multiply by u64x2, use it instead of expanding and scalarizing */
             xacc[i] = data_key * XXH_PRIME32_1;
+#else
+            /*
+             * Expanded version with portable NEON intrinsics
+             *
+             *    lo(x) * lo(y) + (hi(x) * lo(y) << 32)
+             *
+             * prod_hi = hi(data_key) * lo(prime) << 32
+             *
+             * Since we only need 32 bits of this multiply a trick can be used, reinterpreting the vector
+             * as a uint32x4_t and multiplying by { 0, prime, 0, prime } to cancel out the unwanted bits
+             * and avoid the shift.
+             */
+            uint32x4_t prod_hi = vmulq_u32 (vreinterpretq_u32_u64(data_key), kPrimeHi);
+            /* Extract low bits for vmlal_u32  */
+            uint32x2_t data_key_lo = vmovn_u64(data_key);
+            /* xacc[i] = prod_hi + lo(data_key) * XXH_PRIME32_1; */
+            xacc[i] = vmlal_u32(vreinterpretq_u64_u32(prod_hi), data_key_lo, kPrimeLo);
+#endif
         }
     }
 }
@@ -12841,6 +13194,10 @@ typedef void (*XXH3_f_initCustomSecret)(void* XXH_RESTRICT, xxh_u64);
 
 #endif
 
+#if XXH_SIZE_OPT >= 1 /* don't do SIMD for initialization */
+#  undef XXH3_initCustomSecret
+#  define XXH3_initCustomSecret XXH3_initCustomSecret_scalar
+#endif
 
 XXH_FORCE_INLINE void
 XXH3_hashLong_internal_loop(xxh_u64* XXH_RESTRICT acc,
@@ -12978,6 +13335,12 @@ XXH3_hashLong_64b_withSeed_internal(const void* input, size_t len,
                                     XXH3_f_scrambleAcc f_scramble,
                                     XXH3_f_initCustomSecret f_initSec)
 {
+#if XXH_SIZE_OPT <= 0
+    if (seed == 0)
+        return XXH3_hashLong_64b_internal(input, len,
+                                          XXH3_kSecret, sizeof(XXH3_kSecret),
+                                          f_acc, f_scramble);
+#endif
     {   XXH_ALIGN(XXH_SEC_ALIGN) xxh_u8 secret[XXH_SECRET_DEFAULT_SIZE];
         f_initSec(secret, seed);
         return XXH3_hashLong_64b_internal(input, len, secret, sizeof(secret),
@@ -13287,6 +13650,9 @@ XXH3_consumeStripes(xxh_u64* XXH_RESTRICT acc,
 }
 
 #ifndef XXH3_STREAM_USE_STACK
+# if XXH_SIZE_OPT <= 0 && !defined(__clang__) /* clang doesn't need additional stack space */
+#   define XXH3_STREAM_USE_STACK 1
+# endif
 #endif
 /*
  * Both XXH3_64bits_update and XXH3_128bits_update use this routine.
@@ -13627,6 +13993,15 @@ XXH3_len_17to128_128b(const xxh_u8* XXH_RESTRICT input, size_t len,
         acc.low64 = len * XXH_PRIME64_1;
         acc.high64 = 0;
 
+#if XXH_SIZE_OPT >= 1
+        {
+            /* Smaller, but slightly slower. */
+            unsigned int i = (unsigned int)(len - 1) / 32;
+            do {
+                acc = XXH128_mix32B(acc, input+16*i, input+len-16*(i+1), secret+32*i, seed);
+            } while (i-- != 0);
+        }
+#else
         if (len > 32) {
             if (len > 64) {
                 if (len > 96) {
@@ -13637,6 +14012,7 @@ XXH3_len_17to128_128b(const xxh_u8* XXH_RESTRICT input, size_t len,
             acc = XXH128_mix32B(acc, input+16, input+len-32, secret+32, seed);
         }
         acc = XXH128_mix32B(acc, input, input+len-16, secret, seed);
+#endif
         {   XXH128_hash_t h128;
             h128.low64  = acc.low64 + acc.high64;
             h128.high64 = (acc.low64    * XXH_PRIME64_1)
@@ -14059,6 +14435,9 @@ XXH3_generateSecret_fromSeed(XXH_NOESCAPE void* secretBuffer, XXH64_hash_t seed)
 #endif
 
 
+#if defined (__cplusplus)
+} /* extern "C" */
+#endif
 
 #endif  /* XXH_NO_LONG_LONG */
 #endif  /* XXH_NO_XXH3 */
@@ -14448,7 +14827,11 @@ const char* ZSTD_getErrorString(ZSTD_ErrorCode code) { return ERR_getErrorString
 # define HUF_FAST_BMI2_ATTRS
 #endif
 
-#define HUF_EXTERN_C
+#ifdef __cplusplus
+# define HUF_EXTERN_C extern "C"
+#else
+# define HUF_EXTERN_C
+#endif
 #define HUF_ASM_DECL HUF_EXTERN_C
 
 #if DYNAMIC_BMI2
@@ -15082,6 +15465,13 @@ HUF_decompress4X1_usingDTable_internal_body(
     }
 }
 
+#if HUF_NEED_BMI2_FUNCTION
+static BMI2_TARGET_ATTRIBUTE
+size_t HUF_decompress4X1_usingDTable_internal_bmi2(void* dst, size_t dstSize, void const* cSrc,
+                    size_t cSrcSize, HUF_DTable const* DTable) {
+    return HUF_decompress4X1_usingDTable_internal_body(dst, dstSize, cSrc, cSrcSize, DTable);
+}
+#endif
 
 static
 size_t HUF_decompress4X1_usingDTable_internal_default(void* dst, size_t dstSize, void const* cSrc,
@@ -15089,6 +15479,11 @@ size_t HUF_decompress4X1_usingDTable_internal_default(void* dst, size_t dstSize,
     return HUF_decompress4X1_usingDTable_internal_body(dst, dstSize, cSrc, cSrcSize, DTable);
 }
 
+#if ZSTD_ENABLE_ASM_X86_64_BMI2
+
+HUF_ASM_DECL void HUF_decompress4X1_usingDTable_internal_fast_asm_loop(HUF_DecompressFastArgs* args) ZSTDLIB_HIDDEN;
+
+#endif
 
 static HUF_FAST_BMI2_ATTRS
 void HUF_decompress4X1_usingDTable_internal_fast_c_loop(HUF_DecompressFastArgs* args)
@@ -15276,11 +15671,21 @@ static size_t HUF_decompress4X1_usingDTable_internal(void* dst, size_t dstSize, 
 #if DYNAMIC_BMI2
     if (flags & HUF_flags_bmi2) {
         fallbackFn = HUF_decompress4X1_usingDTable_internal_bmi2;
+# if ZSTD_ENABLE_ASM_X86_64_BMI2
+        if (!(flags & HUF_flags_disableAsm)) {
+            loopFn = HUF_decompress4X1_usingDTable_internal_fast_asm_loop;
+        }
+# endif
     } else {
         return fallbackFn(dst, dstSize, cSrc, cSrcSize, DTable);
     }
 #endif
 
+#if ZSTD_ENABLE_ASM_X86_64_BMI2 && defined(__BMI2__)
+    if (!(flags & HUF_flags_disableAsm)) {
+        loopFn = HUF_decompress4X1_usingDTable_internal_fast_asm_loop;
+    }
+#endif
 
     if (HUF_ENABLE_FAST_DECODE && !(flags & HUF_flags_disableFast)) {
         size_t const ret = HUF_decompress4X1_usingDTable_internal_fast(dst, dstSize, cSrc, cSrcSize, DTable, loopFn);
@@ -15863,6 +16268,13 @@ HUF_decompress4X2_usingDTable_internal_body(
     }
 }
 
+#if HUF_NEED_BMI2_FUNCTION
+static BMI2_TARGET_ATTRIBUTE
+size_t HUF_decompress4X2_usingDTable_internal_bmi2(void* dst, size_t dstSize, void const* cSrc,
+                    size_t cSrcSize, HUF_DTable const* DTable) {
+    return HUF_decompress4X2_usingDTable_internal_body(dst, dstSize, cSrc, cSrcSize, DTable);
+}
+#endif
 
 static
 size_t HUF_decompress4X2_usingDTable_internal_default(void* dst, size_t dstSize, void const* cSrc,
@@ -15870,6 +16282,11 @@ size_t HUF_decompress4X2_usingDTable_internal_default(void* dst, size_t dstSize,
     return HUF_decompress4X2_usingDTable_internal_body(dst, dstSize, cSrc, cSrcSize, DTable);
 }
 
+#if ZSTD_ENABLE_ASM_X86_64_BMI2
+
+HUF_ASM_DECL void HUF_decompress4X2_usingDTable_internal_fast_asm_loop(HUF_DecompressFastArgs* args) ZSTDLIB_HIDDEN;
+
+#endif
 
 static HUF_FAST_BMI2_ATTRS
 void HUF_decompress4X2_usingDTable_internal_fast_c_loop(HUF_DecompressFastArgs* args)
@@ -16076,11 +16493,21 @@ static size_t HUF_decompress4X2_usingDTable_internal(void* dst, size_t dstSize, 
 #if DYNAMIC_BMI2
     if (flags & HUF_flags_bmi2) {
         fallbackFn = HUF_decompress4X2_usingDTable_internal_bmi2;
+# if ZSTD_ENABLE_ASM_X86_64_BMI2
+        if (!(flags & HUF_flags_disableAsm)) {
+            loopFn = HUF_decompress4X2_usingDTable_internal_fast_asm_loop;
+        }
+# endif
     } else {
         return fallbackFn(dst, dstSize, cSrc, cSrcSize, DTable);
     }
 #endif
 
+#if ZSTD_ENABLE_ASM_X86_64_BMI2 && defined(__BMI2__)
+    if (!(flags & HUF_flags_disableAsm)) {
+        loopFn = HUF_decompress4X2_usingDTable_internal_fast_asm_loop;
+    }
+#endif
 
     if (HUF_ENABLE_FAST_DECODE && !(flags & HUF_flags_disableFast)) {
         size_t const ret = HUF_decompress4X2_usingDTable_internal_fast(dst, dstSize, cSrc, cSrcSize, DTable, loopFn);
@@ -16547,6 +16974,11 @@ struct ZSTD_DCtx_s
     size_t outStart;
     size_t outEnd;
     size_t lhSize;
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+    void* legacyContext;
+    U32 previousLegacyVersion;
+    U32 legacyVersion;
+#endif
     U32 hostageByte;
     int noForwardProgress;
     ZSTD_bufferMode_e outBufferMode;
@@ -16561,6 +16993,10 @@ struct ZSTD_DCtx_s
 
     size_t oversizedDuration;
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    void const* dictContentBeginForFuzzing;
+    void const* dictContentEndForFuzzing;
+#endif
 
     /* Tracing */
 };  /* typedef'd to ZSTD_DCtx within "zstd.h" */
@@ -16641,6 +17077,9 @@ void ZSTD_copyDDictParameters(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict);
 #endif /* ZSTD_DDICT_H */
 /**** ended inlining zstd_ddict.h ****/
 
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+#error Unable to find: ../legacy/zstd_legacy.h
+#endif
 
 
 
@@ -16679,6 +17118,10 @@ void ZSTD_copyDDictParameters(ZSTD_DCtx* dctx, const ZSTD_DDict* ddict)
     dctx->virtualStart = ddict->dictContent;
     dctx->dictEnd = (const BYTE*)ddict->dictContent + ddict->dictSize;
     dctx->previousDstEnd = dctx->dictEnd;
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    dctx->dictContentBeginForFuzzing = dctx->prefixStart;
+    dctx->dictContentEndForFuzzing = dctx->previousDstEnd;
+#endif
     if (ddict->entropyPresent) {
         dctx->litEntropy = 1;
         dctx->fseEntropy = 1;
@@ -16922,6 +17365,9 @@ __asm__(
 *  LEGACY_SUPPORT :
 *  if set to 1+, ZSTD_decompress() can decode older formats (v0.1+)
 */
+#ifndef ZSTD_LEGACY_SUPPORT
+#  define ZSTD_LEGACY_SUPPORT 0
+#endif
 
 /*!
  *  MAXWINDOWSIZE_DEFAULT :
@@ -17036,6 +17482,9 @@ size_t ZSTD_decompressBlock_deprecated(ZSTD_DCtx* dctx,
 #endif /* ZSTD_DEC_BLOCK_H */
 /**** ended inlining zstd_decompress_block.h ****/
 
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+#error Unable to find: ../legacy/zstd_legacy.h
+#endif
 
 
 
@@ -17225,6 +17674,10 @@ static void ZSTD_initDCtx_internal(ZSTD_DCtx* dctx)
     dctx->inBuffSize  = 0;
     dctx->outBuffSize = 0;
     dctx->streamStage = zdss_init;
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+    dctx->legacyContext = NULL;
+    dctx->previousLegacyVersion = 0;
+#endif
     dctx->noForwardProgress = 0;
     dctx->oversizedDuration = 0;
     dctx->isFrameDecompression = 1;
@@ -17233,6 +17686,9 @@ static void ZSTD_initDCtx_internal(ZSTD_DCtx* dctx)
 #endif
     dctx->ddictSet = NULL;
     ZSTD_DCtx_resetParameters(dctx);
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    dctx->dictContentEndForFuzzing = NULL;
+#endif
 }
 
 ZSTD_DCtx* ZSTD_initStaticDCtx(void *workspace, size_t workspaceSize)
@@ -17286,6 +17742,10 @@ size_t ZSTD_freeDCtx(ZSTD_DCtx* dctx)
         ZSTD_clearDict(dctx);
         ZSTD_customFree(dctx->inBuff, cMem);
         dctx->inBuff = NULL;
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+        if (dctx->legacyContext)
+            ZSTD_freeLegacyStreamContext(dctx->legacyContext, dctx->previousLegacyVersion);
+#endif
         if (dctx->ddictSet) {
             ZSTD_freeDDictHashSet(dctx->ddictSet, cMem);
             dctx->ddictSet = NULL;
@@ -17342,6 +17802,9 @@ unsigned ZSTD_isFrame(const void* buffer, size_t size)
         if (magic == ZSTD_MAGICNUMBER) return 1;
         if ((magic & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) return 1;
     }
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+    if (ZSTD_isLegacy(buffer, size)) return 1;
+#endif
     return 0;
 }
 
@@ -17518,6 +17981,12 @@ size_t ZSTD_getFrameHeader(ZSTD_FrameHeader* zfhPtr, const void* src, size_t src
  *         - ZSTD_CONTENTSIZE_ERROR if an error occurred (e.g. invalid magic number, srcSize too small) */
 unsigned long long ZSTD_getFrameContentSize(const void *src, size_t srcSize)
 {
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+    if (ZSTD_isLegacy(src, srcSize)) {
+        unsigned long long const ret = ZSTD_getDecompressedSize_legacy(src, srcSize);
+        return ret == 0 ? ZSTD_CONTENTSIZE_UNKNOWN : ret;
+    }
+#endif
     {   ZSTD_FrameHeader zfh;
         if (ZSTD_getFrameHeader(&zfh, src, srcSize) != 0)
             return ZSTD_CONTENTSIZE_ERROR;
@@ -17654,11 +18123,13 @@ static size_t ZSTD_decodeFrameHeader(ZSTD_DCtx* dctx, const void* src, size_t he
         ZSTD_DCtx_selectFrameDDict(dctx);
     }
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     /* Skip the dictID check in fuzzing mode, because it makes the search
      * harder.
      */
     RETURN_ERROR_IF(dctx->fParams.dictID && (dctx->dictID != dctx->fParams.dictID),
                     dictionary_wrong, "");
+#endif
     dctx->validateChecksum = (dctx->fParams.checksumFlag && !dctx->forceIgnoreChecksum) ? 1 : 0;
     if (dctx->validateChecksum) XXH64_reset(&dctx->xxhState, 0);
     dctx->processedCSize += headerSize;
@@ -17678,6 +18149,10 @@ static ZSTD_frameSizeInfo ZSTD_findFrameSizeInfo(const void* src, size_t srcSize
     ZSTD_frameSizeInfo frameSizeInfo;
     ZSTD_memset(&frameSizeInfo, 0, sizeof(ZSTD_frameSizeInfo));
 
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+    if (format == ZSTD_f_zstd1 && ZSTD_isLegacy(src, srcSize))
+        return ZSTD_findFrameSizeInfoLegacy(src, srcSize);
+#endif
 
     if (format == ZSTD_f_zstd1 && (srcSize >= ZSTD_SKIPPABLEHEADERSIZE)
         && (MEM_readLE32(src) & ZSTD_MAGIC_SKIPPABLE_MASK) == ZSTD_MAGIC_SKIPPABLE_START) {
@@ -18006,6 +18481,36 @@ size_t ZSTD_decompressMultiFrame(ZSTD_DCtx* dctx,
 
     while (srcSize >= ZSTD_startingInputLength(dctx->format)) {
 
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT >= 1)
+        if (dctx->format == ZSTD_f_zstd1 && ZSTD_isLegacy(src, srcSize)) {
+            size_t decodedSize;
+            size_t const frameSize = ZSTD_findFrameCompressedSizeLegacy(src, srcSize);
+            if (ZSTD_isError(frameSize)) return frameSize;
+            RETURN_ERROR_IF(dctx->staticSize, memory_allocation,
+                "legacy support is not compatible with static dctx");
+
+            decodedSize = ZSTD_decompressLegacy(dst, dstCapacity, src, frameSize, dict, dictSize);
+            if (ZSTD_isError(decodedSize)) return decodedSize;
+
+            {
+                unsigned long long const expectedSize = ZSTD_getFrameContentSize(src, srcSize);
+                RETURN_ERROR_IF(expectedSize == ZSTD_CONTENTSIZE_ERROR, corruption_detected, "Corrupted frame header!");
+                if (expectedSize != ZSTD_CONTENTSIZE_UNKNOWN) {
+                    RETURN_ERROR_IF(expectedSize != decodedSize, corruption_detected,
+                        "Frame header size does not match decoded size!");
+                }
+            }
+
+            assert(decodedSize <= dstCapacity);
+            dst = (BYTE*)dst + decodedSize;
+            dstCapacity -= decodedSize;
+
+            src = (const BYTE*)src + frameSize;
+            srcSize -= frameSize;
+
+            continue;
+        }
+#endif
 
         if (dctx->format == ZSTD_f_zstd1 && srcSize >= 4) {
             U32 const magicNumber = MEM_readLE32(src);
@@ -18328,6 +18833,10 @@ static size_t ZSTD_refDictContent(ZSTD_DCtx* dctx, const void* dict, size_t dict
     dctx->virtualStart = (const char*)dict - ((const char*)(dctx->previousDstEnd) - (const char*)(dctx->prefixStart));
     dctx->prefixStart = dict;
     dctx->previousDstEnd = (const char*)dict + dictSize;
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+    dctx->dictContentBeginForFuzzing = dctx->prefixStart;
+    dctx->dictContentEndForFuzzing = dctx->previousDstEnd;
+#endif
     return 0;
 }
 
@@ -19000,17 +19509,47 @@ size_t ZSTD_decompressStream(ZSTD_DStream* zds, ZSTD_outBuffer* output, ZSTD_inB
             DEBUGLOG(5, "stage zdss_init => transparent reset ");
             zds->streamStage = zdss_loadHeader;
             zds->lhSize = zds->inPos = zds->outStart = zds->outEnd = 0;
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+            zds->legacyVersion = 0;
+#endif
             zds->hostageByte = 0;
             zds->expectedOutBuffer = *output;
             ZSTD_FALLTHROUGH;
 
         case zdss_loadHeader :
             DEBUGLOG(5, "stage zdss_loadHeader (srcSize : %u)", (U32)(iend - ip));
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+            if (zds->legacyVersion) {
+                RETURN_ERROR_IF(zds->staticSize, memory_allocation,
+                    "legacy support is incompatible with static dctx");
+                {   size_t const hint = ZSTD_decompressLegacyStream(zds->legacyContext, zds->legacyVersion, output, input);
+                    if (hint==0) zds->streamStage = zdss_init;
+                    return hint;
+            }   }
+#endif
             {   size_t const hSize = ZSTD_getFrameHeader_advanced(&zds->fParams, zds->headerBuffer, zds->lhSize, zds->format);
                 if (zds->refMultipleDDicts && zds->ddictSet) {
                     ZSTD_DCtx_selectFrameDDict(zds);
                 }
                 if (ZSTD_isError(hSize)) {
+#if defined(ZSTD_LEGACY_SUPPORT) && (ZSTD_LEGACY_SUPPORT>=1)
+                    U32 const legacyVersion = ZSTD_isLegacy(istart, iend-istart);
+                    if (legacyVersion) {
+                        ZSTD_DDict const* const ddict = ZSTD_getDDict(zds);
+                        const void* const dict = ddict ? ZSTD_DDict_dictContent(ddict) : NULL;
+                        size_t const dictSize = ddict ? ZSTD_DDict_dictSize(ddict) : 0;
+                        DEBUGLOG(5, "ZSTD_decompressStream: detected legacy version v0.%u", legacyVersion);
+                        RETURN_ERROR_IF(zds->staticSize, memory_allocation,
+                            "legacy support is incompatible with static dctx");
+                        FORWARD_IF_ERROR(ZSTD_initLegacyStream(&zds->legacyContext,
+                                    zds->previousLegacyVersion, legacyVersion,
+                                    dict, dictSize), "");
+                        zds->legacyVersion = zds->previousLegacyVersion = legacyVersion;
+                        {   size_t const hint = ZSTD_decompressLegacyStream(zds->legacyContext, legacyVersion, output, input);
+                            if (hint==0) zds->streamStage = zdss_init;   /* or stay in stage zdss_loadHeader */
+                            return hint;
+                    }   }
+#endif
                     return hSize;   /* error */
                 }
                 if (hSize != 0) {   /* need more input */
@@ -20610,6 +21149,55 @@ ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets, c
     return seq;
 }
 
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+#if DEBUGLEVEL >= 1
+static int ZSTD_dictionaryIsActive(ZSTD_DCtx const* dctx, BYTE const* prefixStart, BYTE const* oLitEnd)
+{
+    size_t const windowSize = dctx->fParams.windowSize;
+    /* No dictionary used. */
+    if (dctx->dictContentEndForFuzzing == NULL) return 0;
+    /* Dictionary is our prefix. */
+    if (prefixStart == dctx->dictContentBeginForFuzzing) return 1;
+    /* Dictionary is not our ext-dict. */
+    if (dctx->dictEnd != dctx->dictContentEndForFuzzing) return 0;
+    /* Dictionary is not within our window size. */
+    if ((size_t)(oLitEnd - prefixStart) >= windowSize) return 0;
+    /* Dictionary is active. */
+    return 1;
+}
+#endif
+
+static void ZSTD_assertValidSequence(
+        ZSTD_DCtx const* dctx,
+        BYTE const* op, BYTE const* oend,
+        seq_t const seq,
+        BYTE const* prefixStart, BYTE const* virtualStart)
+{
+#if DEBUGLEVEL >= 1
+    if (dctx->isFrameDecompression) {
+        size_t const windowSize = dctx->fParams.windowSize;
+        size_t const sequenceSize = seq.litLength + seq.matchLength;
+        BYTE const* const oLitEnd = op + seq.litLength;
+        DEBUGLOG(6, "Checking sequence: litL=%u matchL=%u offset=%u",
+                (U32)seq.litLength, (U32)seq.matchLength, (U32)seq.offset);
+        assert(op <= oend);
+        assert((size_t)(oend - op) >= sequenceSize);
+        assert(sequenceSize <= ZSTD_blockSizeMax(dctx));
+        if (ZSTD_dictionaryIsActive(dctx, prefixStart, oLitEnd)) {
+            size_t const dictSize = (size_t)((char const*)dctx->dictContentEndForFuzzing - (char const*)dctx->dictContentBeginForFuzzing);
+            /* Offset must be within the dictionary. */
+            assert(seq.offset <= (size_t)(oLitEnd - virtualStart));
+            assert(seq.offset <= windowSize + dictSize);
+        } else {
+            /* Offset must be within our window. */
+            assert(seq.offset <= windowSize);
+        }
+    }
+#else
+    (void)dctx, (void)op, (void)oend, (void)seq, (void)prefixStart, (void)virtualStart;
+#endif
+}
+#endif
 
 #ifndef ZSTD_FORCE_DECOMPRESS_SEQUENCES_LONG
 
@@ -20718,6 +21306,10 @@ ZSTD_decompressSequences_bodySplitLitBuffer( ZSTD_DCtx* dctx,
                 sequence = ZSTD_decodeSequence(&seqState, isLongOffset, nbSeq==1);
                 if (litPtr + sequence.litLength > dctx->litBufferEnd) break;
                 {   size_t const oneSeqSize = ZSTD_execSequenceSplitLitBuffer(op, oend, litPtr + sequence.litLength - WILDCOPY_OVERLENGTH, sequence, &litPtr, litBufferEnd, prefixStart, vBase, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                    assert(!ZSTD_isError(oneSeqSize));
+                    ZSTD_assertValidSequence(dctx, op, oend, sequence, prefixStart, vBase);
+#endif
                     if (UNLIKELY(ZSTD_isError(oneSeqSize)))
                         return oneSeqSize;
                     DEBUGLOG(6, "regenerated sequence size : %u", (U32)oneSeqSize);
@@ -20739,6 +21331,10 @@ ZSTD_decompressSequences_bodySplitLitBuffer( ZSTD_DCtx* dctx,
                 litBufferEnd = dctx->litExtraBuffer + ZSTD_LITBUFFEREXTRASIZE;
                 dctx->litBufferLocation = ZSTD_not_in_dst;
                 {   size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequence, &litPtr, litBufferEnd, prefixStart, vBase, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                    assert(!ZSTD_isError(oneSeqSize));
+                    ZSTD_assertValidSequence(dctx, op, oend, sequence, prefixStart, vBase);
+#endif
                     if (UNLIKELY(ZSTD_isError(oneSeqSize)))
                         return oneSeqSize;
                     DEBUGLOG(6, "regenerated sequence size : %u", (U32)oneSeqSize);
@@ -20771,6 +21367,10 @@ ZSTD_decompressSequences_bodySplitLitBuffer( ZSTD_DCtx* dctx,
             for ( ; nbSeq ; nbSeq--) {
                 seq_t const sequence = ZSTD_decodeSequence(&seqState, isLongOffset, nbSeq==1);
                 size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequence, &litPtr, litBufferEnd, prefixStart, vBase, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                assert(!ZSTD_isError(oneSeqSize));
+                ZSTD_assertValidSequence(dctx, op, oend, sequence, prefixStart, vBase);
+#endif
                 if (UNLIKELY(ZSTD_isError(oneSeqSize)))
                     return oneSeqSize;
                 DEBUGLOG(6, "regenerated sequence size : %u", (U32)oneSeqSize);
@@ -20863,6 +21463,10 @@ ZSTD_decompressSequences_body(ZSTD_DCtx* dctx,
         for ( ; nbSeq ; nbSeq--) {
             seq_t const sequence = ZSTD_decodeSequence(&seqState, isLongOffset, nbSeq==1);
             size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequence, &litPtr, litEnd, prefixStart, vBase, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+            assert(!ZSTD_isError(oneSeqSize));
+            ZSTD_assertValidSequence(dctx, op, oend, sequence, prefixStart, vBase);
+#endif
             if (UNLIKELY(ZSTD_isError(oneSeqSize)))
                 return oneSeqSize;
             DEBUGLOG(6, "regenerated sequence size : %u", (U32)oneSeqSize);
@@ -20994,6 +21598,10 @@ ZSTD_decompressSequencesLong_body(
                 litBufferEnd = dctx->litExtraBuffer + ZSTD_LITBUFFEREXTRASIZE;
                 dctx->litBufferLocation = ZSTD_not_in_dst;
                 {   size_t const oneSeqSize = ZSTD_execSequence(op, oend, sequences[(seqNb - ADVANCED_SEQS) & STORED_SEQS_MASK], &litPtr, litBufferEnd, prefixStart, dictStart, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                    assert(!ZSTD_isError(oneSeqSize));
+                    ZSTD_assertValidSequence(dctx, op, oend, sequences[(seqNb - ADVANCED_SEQS) & STORED_SEQS_MASK], prefixStart, dictStart);
+#endif
                     if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
 
                     prefetchPos = ZSTD_prefetchMatch(prefetchPos, sequence, prefixStart, dictEnd);
@@ -21006,6 +21614,10 @@ ZSTD_decompressSequencesLong_body(
                 size_t const oneSeqSize = dctx->litBufferLocation == ZSTD_split ?
                     ZSTD_execSequenceSplitLitBuffer(op, oend, litPtr + sequences[(seqNb - ADVANCED_SEQS) & STORED_SEQS_MASK].litLength - WILDCOPY_OVERLENGTH, sequences[(seqNb - ADVANCED_SEQS) & STORED_SEQS_MASK], &litPtr, litBufferEnd, prefixStart, dictStart, dictEnd) :
                     ZSTD_execSequence(op, oend, sequences[(seqNb - ADVANCED_SEQS) & STORED_SEQS_MASK], &litPtr, litBufferEnd, prefixStart, dictStart, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                assert(!ZSTD_isError(oneSeqSize));
+                ZSTD_assertValidSequence(dctx, op, oend, sequences[(seqNb - ADVANCED_SEQS) & STORED_SEQS_MASK], prefixStart, dictStart);
+#endif
                 if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
 
                 prefetchPos = ZSTD_prefetchMatch(prefetchPos, sequence, prefixStart, dictEnd);
@@ -21031,6 +21643,10 @@ ZSTD_decompressSequencesLong_body(
                 litBufferEnd = dctx->litExtraBuffer + ZSTD_LITBUFFEREXTRASIZE;
                 dctx->litBufferLocation = ZSTD_not_in_dst;
                 {   size_t const oneSeqSize = ZSTD_execSequence(op, oend, *sequence, &litPtr, litBufferEnd, prefixStart, dictStart, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                    assert(!ZSTD_isError(oneSeqSize));
+                    ZSTD_assertValidSequence(dctx, op, oend, sequences[seqNb&STORED_SEQS_MASK], prefixStart, dictStart);
+#endif
                     if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
                     op += oneSeqSize;
                 }
@@ -21040,6 +21656,10 @@ ZSTD_decompressSequencesLong_body(
                 size_t const oneSeqSize = dctx->litBufferLocation == ZSTD_split ?
                     ZSTD_execSequenceSplitLitBuffer(op, oend, litPtr + sequence->litLength - WILDCOPY_OVERLENGTH, *sequence, &litPtr, litBufferEnd, prefixStart, dictStart, dictEnd) :
                     ZSTD_execSequence(op, oend, *sequence, &litPtr, litBufferEnd, prefixStart, dictStart, dictEnd);
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && defined(FUZZING_ASSERT_VALID_SEQUENCE)
+                assert(!ZSTD_isError(oneSeqSize));
+                ZSTD_assertValidSequence(dctx, op, oend, sequences[seqNb&STORED_SEQS_MASK], prefixStart, dictStart);
+#endif
                 if (ZSTD_isError(oneSeqSize)) return oneSeqSize;
                 op += oneSeqSize;
             }
@@ -21395,7 +22015,6 @@ size_t ZSTD_decompressBlock(ZSTD_DCtx* dctx,
 
 // Bump only. Reset in JS via pb(ptr) "prune buf"
 // Global variables do not live in the linear memory of the wasm module, ruling out overflow into the cursor.
-// Also provides minor performance benefit as it compiles down to fewer instructions. (see comparison below)
 WASM_EXPORT
 void* malloc(size_t size) {
     size_t ptr;
@@ -21467,7 +22086,7 @@ void* malloc(size_t size) {
     ------------------------------
 */
 
-void* free(void* ptr) {
+void free(void* ptr) {
     (void)ptr; // no-op
 }
 
@@ -21531,7 +22150,7 @@ void re(void)
 // -> since we previously already reserved sufficient space for ZSTD_dctx.
 void _initialize(void) {
     dctx->dictUses = ZSTD_use_indefinitely;
-    dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
+    dctx->maxWindowSize = 8388609;
     pb(131072);
 }
 
@@ -21539,7 +22158,7 @@ void _initialize(void) {
     Manually folded / inlined ZSTD_createDDict
 */
 WASM_EXPORT
-void* cd(const void* dict, size_t dictSize) {
+void cd(const void* dict, size_t dictSize) {
     ddict = (ZSTD_DDict*) malloc(sizeof(ZSTD_DDict));
     ddict->dictContent = dict;
     ddict->dictSize = dictSize;
@@ -21556,35 +22175,10 @@ void* cd(const void* dict, size_t dictSize) {
     dctx->ddict = ddict;
 }
 
-
-/*
-    Manually folded / inlined ZSTD_decompress_insertDictionary
-*/
-static size_t decompress_insertDictionary(const void* dict, size_t dictSize)
-{
-    if (dictSize < 8) return ZSTD_refDictContent(dctx, dict, dictSize);
-    {   U32 const magic = MEM_readLE32(dict);
-        if (magic != ZSTD_MAGIC_DICTIONARY) {
-            return ZSTD_refDictContent(dctx, dict, dictSize);   /* pure content mode */
-    }   }
-    dctx->dictID = MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
-
-    /* load entropy tables */
-    {   size_t const eSize = ZSTD_loadDEntropy(&dctx->entropy, dict, dictSize);
-        RETURN_ERROR_IF(ZSTD_isError(eSize), dictionary_corrupted, "");
-        dict = (const char*)dict + eSize;
-        dictSize -= eSize;
-    }
-    dctx->litEntropy = dctx->fseEntropy = 1;
-
-    /* reference dictionary content */
-    return ZSTD_refDictContent(dctx, dict, dictSize);
-}
-
 /*
     Manually folded / inlined ZSTD_decompressBegin_usingDDict
 */
-static size_t decompressBegin_usingDDict()
+static size_t decompressBegin_usingDDict(void)
 {   
     if (ddict) {
         const char* const dictStart = (const char*)ddict->dictContent;
@@ -21611,13 +22205,6 @@ static size_t dm(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
 {
     void* const dststart = dst;
     int moreThan1Frame = 0;
-    const void* dict = NULL;
-    size_t dictSize = 0;
-
-    if (ddict) {
-        dict = ddict->dictContent;
-        dictSize = ddict->dictSize;
-    }
 
     while (srcSize >= ZSTD_startingInputLength(dctx->format)) {
         if (dctx->format == ZSTD_f_zstd1 && srcSize >= 4) {
@@ -21640,10 +22227,6 @@ static size_t dm(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
             /* this will initialize correctly with no dict if dict == NULL, so
              * use this in all cases but ddict */
             FORWARD_IF_ERROR(ZSTD_decompressBegin(dctx), "");
-            if (dict && dictSize)
-            RETURN_ERROR_IF(
-                ZSTD_isError(decompress_insertDictionary(dict, dictSize)),
-                dictionary_corrupted, "");
         }
         ZSTD_checkContinuity(dctx, dst, dstCapacity);
 
@@ -21686,24 +22269,14 @@ size_t dS(void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
 WASM_EXPORT
 size_t ds(void) {
     const char* const src = (const char*)in_buffer->src;
-    const char* const istart = in_buffer->pos != 0 ? src + in_buffer->pos : src;
-    const char* const iend = in_buffer->size != 0 ? src + in_buffer->size : src;
+    const char* const istart = src + in_buffer->pos;
+    const char* const iend = src + in_buffer->size;
     const char* ip = istart;
     char* const dst = (char*)out_buffer->dst;
-    char* const ostart = out_buffer->pos != 0 ? dst + out_buffer->pos : dst;
-    char* const oend = out_buffer->size != 0 ? dst + out_buffer->size : dst;
+    char* const ostart = dst + out_buffer->pos;
+    char* const oend = dst + out_buffer->size;
     char* op = ostart;
     U32 someMoreWork = 1;
-    RETURN_ERROR_IF(
-        in_buffer->pos > in_buffer->size,
-        srcSize_wrong,
-        "forbidden. in: pos: %u   vs size: %u",
-        (U32)in_buffer->pos, (U32)in_buffer->size);
-    RETURN_ERROR_IF(
-        out_buffer->pos > out_buffer->size,
-        dstSize_tooSmall,
-        "forbidden. out: pos: %u   vs size: %u",
-        (U32)out_buffer->pos, (U32)out_buffer->size);
 
     while (someMoreWork) {
         switch(dctx->streamStage)
@@ -21752,7 +22325,7 @@ size_t ds(void) {
                     size_t const decompressedSize = dm(op, (size_t)(oend-op), istart, cSize);
                     if (ZSTD_isError(decompressedSize)) return decompressedSize;
                     ip = istart + cSize;
-                    op = op ? op + decompressedSize : op; /* can occur if frameContentSize = 0 (empty frame) */
+                    op += decompressedSize; /* can occur if frameContentSize = 0 (empty frame) */
                     dctx->expected = 0;
                     dctx->streamStage = zdss_init;
                     someMoreWork = 0;
@@ -21776,8 +22349,6 @@ size_t ds(void) {
             dctx->fParams.windowSize = MAX(dctx->fParams.windowSize, 1U << ZSTD_WINDOWLOG_ABSOLUTEMIN);
             RETURN_ERROR_IF(dctx->fParams.windowSize > dctx->maxWindowSize,
                             frameParameter_windowTooLarge, "");
-            if (dctx->maxBlockSizeParam != 0)
-                dctx->fParams.blockSizeMax = MIN(dctx->fParams.blockSizeMax, (unsigned)dctx->maxBlockSizeParam);
 
             /* Adapt buffer sizes to frame header instructions */
             {   size_t const neededInBuffSize = MAX(dctx->fParams.blockSizeMax, 4 /* frame checksum */);
@@ -21854,7 +22425,7 @@ size_t ds(void) {
                 size_t const toFlushSize = dctx->outEnd - dctx->outStart;
                 size_t const flushedSize = ZSTD_limitCopy(op, (size_t)(oend-op), dctx->outBuff + dctx->outStart, toFlushSize);
 
-                op = op ? op + flushedSize : op;
+                op += flushedSize;
 
                 dctx->outStart += flushedSize;
                 if (flushedSize == toFlushSize) {  /* flush completed */

@@ -71,11 +71,12 @@
                             
                              4b srcPtr         4b srcPtr
                                 4b size            4b size     
-                                   4b pos              4b pos                          Dctx
-    Stack        Heap        ZSTD_inBuffer*    ZSTD_outBuffer*          ptr            95804b       Heap
-    0 <--- 8192         --->               --->                --->   ZSTD_DCtx*       --->         Data
+                                   4b pos             4b pos
+                                      4b pad             4b pad                Dctx
+    Stack        Heap        ZSTD_inBuffer*    ZSTD_outBuffer*                 95804b       Heap
+    0 <--- 8192         --->               --->                --->            Data
                 Cursor
-                        8196               8208                8220               8224        104028 
+                        8192               8208                8224            8224        104028 
     
     The statically allocated dctx consumes about 96k bytes. The final number is rounded up,
     such that the constants for the access to those static data throughout the bytecode are
@@ -151,7 +152,6 @@ __asm__(
 
 // Bump only. Reset in JS via pb(ptr) "prune buf"
 // Global variables do not live in the linear memory of the wasm module, ruling out overflow into the cursor.
-// Also provides minor performance benefit as it compiles down to fewer instructions. (see comparison below)
 WASM_EXPORT
 void* malloc(size_t size) {
     size_t ptr;
@@ -223,7 +223,7 @@ void* malloc(size_t size) {
     ------------------------------
 */
 
-void* free(void* ptr) {
+void free(void* ptr) {
     (void)ptr; // no-op
 }
 
@@ -287,7 +287,7 @@ void re(void)
 // -> since we previously already reserved sufficient space for ZSTD_dctx.
 void _initialize(void) {
     dctx->dictUses = ZSTD_use_indefinitely;
-    dctx->maxWindowSize = ZSTD_MAXWINDOWSIZE_DEFAULT;
+    dctx->maxWindowSize = 8388609;
     pb(131072);
 }
 
@@ -295,7 +295,7 @@ void _initialize(void) {
     Manually folded / inlined ZSTD_createDDict
 */
 WASM_EXPORT
-void* cd(const void* dict, size_t dictSize) {
+void cd(const void* dict, size_t dictSize) {
     ddict = (ZSTD_DDict*) malloc(sizeof(ZSTD_DDict));
     ddict->dictContent = dict;
     ddict->dictSize = dictSize;
@@ -312,35 +312,10 @@ void* cd(const void* dict, size_t dictSize) {
     dctx->ddict = ddict;
 }
 
-
-/*
-    Manually folded / inlined ZSTD_decompress_insertDictionary
-*/
-static size_t decompress_insertDictionary(const void* dict, size_t dictSize)
-{
-    if (dictSize < 8) return ZSTD_refDictContent(dctx, dict, dictSize);
-    {   U32 const magic = MEM_readLE32(dict);
-        if (magic != ZSTD_MAGIC_DICTIONARY) {
-            return ZSTD_refDictContent(dctx, dict, dictSize);   /* pure content mode */
-    }   }
-    dctx->dictID = MEM_readLE32((const char*)dict + ZSTD_FRAMEIDSIZE);
-
-    /* load entropy tables */
-    {   size_t const eSize = ZSTD_loadDEntropy(&dctx->entropy, dict, dictSize);
-        RETURN_ERROR_IF(ZSTD_isError(eSize), dictionary_corrupted, "");
-        dict = (const char*)dict + eSize;
-        dictSize -= eSize;
-    }
-    dctx->litEntropy = dctx->fseEntropy = 1;
-
-    /* reference dictionary content */
-    return ZSTD_refDictContent(dctx, dict, dictSize);
-}
-
 /*
     Manually folded / inlined ZSTD_decompressBegin_usingDDict
 */
-static size_t decompressBegin_usingDDict()
+static size_t decompressBegin_usingDDict(void)
 {   
     if (ddict) {
         const char* const dictStart = (const char*)ddict->dictContent;
@@ -367,13 +342,6 @@ static size_t dm(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
 {
     void* const dststart = dst;
     int moreThan1Frame = 0;
-    const void* dict = NULL;
-    size_t dictSize = 0;
-
-    if (ddict) {
-        dict = ddict->dictContent;
-        dictSize = ddict->dictSize;
-    }
 
     while (srcSize >= ZSTD_startingInputLength(dctx->format)) {
         if (dctx->format == ZSTD_f_zstd1 && srcSize >= 4) {
@@ -396,10 +364,6 @@ static size_t dm(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
             /* this will initialize correctly with no dict if dict == NULL, so
              * use this in all cases but ddict */
             FORWARD_IF_ERROR(ZSTD_decompressBegin(dctx), "");
-            if (dict && dictSize)
-            RETURN_ERROR_IF(
-                ZSTD_isError(decompress_insertDictionary(dict, dictSize)),
-                dictionary_corrupted, "");
         }
         ZSTD_checkContinuity(dctx, dst, dstCapacity);
 
@@ -442,24 +406,14 @@ size_t dS(void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
 WASM_EXPORT
 size_t ds(void) {
     const char* const src = (const char*)in_buffer->src;
-    const char* const istart = in_buffer->pos != 0 ? src + in_buffer->pos : src;
-    const char* const iend = in_buffer->size != 0 ? src + in_buffer->size : src;
+    const char* const istart = src + in_buffer->pos;
+    const char* const iend = src + in_buffer->size;
     const char* ip = istart;
     char* const dst = (char*)out_buffer->dst;
-    char* const ostart = out_buffer->pos != 0 ? dst + out_buffer->pos : dst;
-    char* const oend = out_buffer->size != 0 ? dst + out_buffer->size : dst;
+    char* const ostart = dst + out_buffer->pos;
+    char* const oend = dst + out_buffer->size;
     char* op = ostart;
     U32 someMoreWork = 1;
-    RETURN_ERROR_IF(
-        in_buffer->pos > in_buffer->size,
-        srcSize_wrong,
-        "forbidden. in: pos: %u   vs size: %u",
-        (U32)in_buffer->pos, (U32)in_buffer->size);
-    RETURN_ERROR_IF(
-        out_buffer->pos > out_buffer->size,
-        dstSize_tooSmall,
-        "forbidden. out: pos: %u   vs size: %u",
-        (U32)out_buffer->pos, (U32)out_buffer->size);
 
     while (someMoreWork) {
         switch(dctx->streamStage)
@@ -508,7 +462,7 @@ size_t ds(void) {
                     size_t const decompressedSize = dm(op, (size_t)(oend-op), istart, cSize);
                     if (ZSTD_isError(decompressedSize)) return decompressedSize;
                     ip = istart + cSize;
-                    op = op ? op + decompressedSize : op; /* can occur if frameContentSize = 0 (empty frame) */
+                    op += decompressedSize; /* can occur if frameContentSize = 0 (empty frame) */
                     dctx->expected = 0;
                     dctx->streamStage = zdss_init;
                     someMoreWork = 0;
@@ -532,8 +486,6 @@ size_t ds(void) {
             dctx->fParams.windowSize = MAX(dctx->fParams.windowSize, 1U << ZSTD_WINDOWLOG_ABSOLUTEMIN);
             RETURN_ERROR_IF(dctx->fParams.windowSize > dctx->maxWindowSize,
                             frameParameter_windowTooLarge, "");
-            if (dctx->maxBlockSizeParam != 0)
-                dctx->fParams.blockSizeMax = MIN(dctx->fParams.blockSizeMax, (unsigned)dctx->maxBlockSizeParam);
 
             /* Adapt buffer sizes to frame header instructions */
             {   size_t const neededInBuffSize = MAX(dctx->fParams.blockSizeMax, 4 /* frame checksum */);
@@ -610,7 +562,7 @@ size_t ds(void) {
                 size_t const toFlushSize = dctx->outEnd - dctx->outStart;
                 size_t const flushedSize = ZSTD_limitCopy(op, (size_t)(oend-op), dctx->outBuff + dctx->outStart, toFlushSize);
 
-                op = op ? op + flushedSize : op;
+                op += flushedSize;
 
                 dctx->outStart += flushedSize;
                 if (flushedSize == toFlushSize) {  /* flush completed */

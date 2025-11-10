@@ -1,14 +1,14 @@
 import { _internal } from './shared.js';
 
-export { 
-  ZstdDecoder,
+// biome-ignore lint/performance/noBarrelFile: entrypoint module
+export {
   createDecoder,
-  ZstdDecompressionStream,
   decompress,
   decompressStream,
-  decompressSync
+  decompressSync,
+  ZstdDecoder,
+  ZstdDecompressionStream,
 } from './shared.js';
-
 
 _internal._loader = async (wasmPath?: string) => {
   const wasmUrl = wasmPath || new URL('./zstd-decoder.wasm', import.meta.url).href;

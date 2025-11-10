@@ -1,34 +1,48 @@
-name: CI
+name: Release
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for info only'
+        required: false
+      dry_run:
+        description: 'Build+attest only (no publish)'
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE_DIR: packages/zstd-wasm-decoder/src
 
 jobs:
   build-setup:
     uses: ./.github/workflows/build-setup.yml
     permissions:
       contents: read
-      attestations: read  # required by `gh attestation verify` to fetch attestation
+      attestations: read  # required by `gh attestation verify` to fetch attestatio
 
-  build-and-test:
-    needs: build-setup
+  publish:
+    name: Publish to npm with provenance
+    needs: [build-setup]
     runs-on: ubuntu-latest
+    environment: npm-publish
     permissions:
-      contents: read
-      
-    strategy:
-      fail-fast: true
-    
-    name: "Build & Test"
+      contents: write            # for GitHub Release creation
+      id-token: write            # required for `npm publish --provenance`
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry_run == 'false')
+
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -78,6 +92,7 @@ jobs:
           node-version: "25.1.0"
           cache: pnpm
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76
@@ -103,19 +118,18 @@ jobs:
         env:
           CC: clang
 
-      - name: Install Playwright browsers
-        run: pnpm run ci:postinstall:browsers
+      - name: Build
+        run: |
+          pnpm run build:ts:prep
 
-      - name: Test (Release builds, browsers)
-        run: pnpm run test:release:browsers
-      
-      - name: Test (Release builds)
-        run: pnpm run test:release
-      
-      - name: Switch to Node 22
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903
-        with:
-          node-version: 22
-
-      - name: Test (Node 22)
-        run: pnpm run test:node
+      - name: Pack & publish with provenance
+        working-directory: ${{ env.PACKAGE_DIR }}
+        env:
+          NPM_CONFIG_PROVENANCE: "true" # belt & suspenders
+        run: |
+          set -euo pipefail
+          OUT=$(npm pack --json)
+          TARBALL=$(node -e "console.log(JSON.parse(process.argv[1])[0].filename)" "$OUT")
+          echo "Tarball: $TARBALL"
+          # publish the exact tarball
+          npm publish "$TARBALL" --provenance --access public

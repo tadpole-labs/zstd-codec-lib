@@ -35,13 +35,18 @@ CFLAGS += -I$(BIN_DIR)/include -I$(BIN_DIR) -I../../vendor/zstd/lib
 CFLAGS += -ffreestanding
 CFLAGS += -msimd128
 CFLAGS += -msign-ext
-# CFLAGS += -mtail-call
+
+# CFLAGS += -mtail-call - good feature to reduce stack needs
+# might need the one or another manual hint to the compiler
+# currently its only placed at two places (automatically)
+# barely yielding perf. benefits. Also supported since chrome 121
+# which is probably too early for a published lib as of now
 CFLAGS += -mno-atomics
 CFLAGS += -mbulk-memory
 CFLAGS += -mexec-model=reactor
 CFLAGS += -mcpu=generic
 CFLAGS += -flto -DNDEBUG -g0
-CFLAGS += -fno-stack-protector -fomit-frame-pointer -fno-ident -fno-trapping-math -ffunction-sections -fdata-sections -fuse-linker-plugin -fno-sanitize=pointer-overflow -fno-sanitize=signed-integer-overflow -fno-math-errno -fmerge-all-constants -fno-strict-aliasing
+CFLAGS += -fno-stack-protector -fomit-frame-pointer -fno-ident -fno-trapping-math -ffunction-sections -fdata-sections -fno-sanitize=pointer-overflow -fno-sanitize=signed-integer-overflow -fno-math-errno -fmerge-all-constants -fno-strict-aliasing
 
 # Best bang for the byte
 CFLAGS += -DHUF_FORCE_DECOMPRESS_X2
@@ -51,8 +56,8 @@ CFLAGS += -DZSTD_FORCE_DECOMPRESS_SEQUENCES_SHORT
 # CFLAGS += -DZSTD_NO_INTRINSICS
 CFLAGS += -DNO_PREFETCH
 CFLAGS += -DXXH_NO_PREFETCH
-CFLAGS += -Wall -Wextra -Wcast-qual -Wcast-align -Wshadow
-CFLAGS += -Wstrict-aliasing=1 -Wstrict-prototypes -Wundef
+CFLAGS += -Wall -Wextra -Wcast-qual -Wcast-align
+CFLAGS += -Wstrict-aliasing=1 -Wstrict-prototypes
 CFLAGS += -Wpointer-arith -Wformat=2 -Wwrite-strings
 CFLAGS += -Wredundant-decls -Wno-unused-parameter
 
@@ -69,7 +74,7 @@ CFLAGS_SIZE += -DZSTD_NO_INLINE
 CFLAGS_SIZE += $(CFLAGS) -Oz
 CFLAGS_PERF = $(CFLAGS) -Os
 
-# _initialize is the entry ("ultra minimal ZSTD_createDCtx)
+# _initialize is the entry (the"ultra minimal" ZSTD_createDCtx)
 # LDFLAGS = -Wl,--no-entry
 LDFLAGS += -Wl,--allow-undefined
 LDFLAGS += -Wl,--strip-all
@@ -133,7 +138,7 @@ WASM_OPT_FLAGS_EXTRA = \
 	--gufa-cast-all \
 	--gufa-optimizing
 
-WASM_OPT_FLAGS_SIZE =  $(WASM_OPT_FLAGS_PRE) -Oz $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA)
+WASM_OPT_FLAGS_SIZE = $(WASM_OPT_FLAGS_PRE) -Oz $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA)
 WASM_OPT_FLAGS_PERF = $(WASM_OPT_FLAGS_PRE) $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_FLAGS_EXTRA) -Os
 
 .PHONY: all clean check-tools test tests regenerate-amalgamated help size perf
@@ -168,7 +173,7 @@ clean:
 	rm -rf $(OUTPUT_DIR)
 
 test tests: all
-	@cd ../.. && npm run test
+	@cd ../.. && pnpm run test
 
 regenerate-amalgamated:
 	@cd $(BIN_DIR) && ./create_amalgamated_wasm.sh

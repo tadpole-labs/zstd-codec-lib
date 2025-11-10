@@ -6,8 +6,15 @@ node_modules
 /packages/zstd-wasm-decoder/build
 /packages/zstd-wasm-decoder/src/_esm
 /packages/zstd-wasm-decoder/src/_types
+/packages/zstd-wasm-decoder/src/_types
+/packages/zstd-wasm-decoder/src/README.md
+/packages/zstd-wasm-decoder/src/LICENSE
 /tests/benchmark/compressed/*.zst
+/tests/benchmark/compressed/*.json
 /tests/data/*.json
+/test/benchmark/compressed/*.zst
+/test/benchmark/compressed/*.json
+/test/data/*.json
 
 *.dll
 *.so
