@@ -144,12 +144,6 @@ WASM_OPT_FLAGS_PERF = $(WASM_OPT_FLAGS_PRE) $(WASM_OPT_FLAGS_COMMON) $(WASM_OPT_
 .PHONY: all clean check-tools test tests regenerate-amalgamated help size perf
 
 all: check-tools size perf
-	@if command -v bun >/dev/null 2>&1; then \
-		bun build.ts; \
-	else \
-		echo "Error: bun not found"; \
-		exit 1; \
-	fi
 
 size: check-tools regenerate-amalgamated $(OUTPUT_DIR)
 	@echo "Building size-optimized WASM..."

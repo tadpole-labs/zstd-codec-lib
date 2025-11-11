@@ -128,6 +128,9 @@ jobs:
       - name: Test (Release builds)
         run: pnpm run test:release
 
+      - name: Test (Release builds, browsers)
+        run: pnpm run test:release:browsers
+
       - name: Pack & publish with provenance
         working-directory: ${{ env.PACKAGE_DIR }}
         env:

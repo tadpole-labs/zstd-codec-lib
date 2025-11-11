@@ -25,11 +25,13 @@
     "test:all-runtimes": "pnpm run test:node && pnpm run test:browsers && pnpm run test:bun",
     "test:release": "vitest run --config test/vitest.config.ts test/suite.test.ts && bun vitest run --config test/vitest.config.ts test/suite.test.ts",
     "test:release:browsers": "TEST_ADAPTER=browser-all TEST_VARIANT=web-inlined vitest run --config test/vitest.config.ts test/suite.test.ts && TEST_ADAPTER=browser-all TEST_VARIANT=web-inlined-perf vitest run --config test/vitest.config.ts test/suite.test.ts",
+    "build": "pnpm run build:all",
     "build:all": "pnpm run build:decoder",
     "build:wasm": "cd packages/zstd-wasm-decoder && make",
     "build:ts": "cd packages/zstd-wasm-decoder && bun build.ts",
     "build:ts:prep": "cd packages/zstd-wasm-decoder && bun build.ts --prep",
     "build:decoder": "pnpm run build:wasm && pnpm run build:ts",
+    "clean": "pnpm run clean:decoder",
     "clean:decoder": "cd packages/zstd-wasm-decoder && rm -rf build src/_esm src/_types src/*.wasm",
     "bench:setup": "bun test/benchmark/setup.ts",
     "bench": "bun test/benchmark/bench.ts",
@@ -49,9 +51,6 @@
       "ignoreMissing": [
         "@types/react"
       ]
-    },
-    "executionEnv": {
-      "nodeVersion": "25.1.0"
     }
   },
   "devDependencies": {

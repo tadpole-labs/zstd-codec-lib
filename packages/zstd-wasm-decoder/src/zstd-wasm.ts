@@ -149,7 +149,7 @@ class ZstdDecoder {
     // Initialize dictionary if provided
     if (this._dictionary) {
       const _dictLen = this._dictionary.length;
-      if (_dictLen > _MAX_SRC_BUF * 2) {
+      if (_dictLen > _MAX_SRC_BUF) {
         throw new err('dict>2mb');
       }
       const dictPtr = this._exports.malloc(_dictLen);

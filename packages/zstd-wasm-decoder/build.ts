@@ -193,14 +193,12 @@ for (const config of configs) {
  * isn't worth it (for slim modules)
  */
 
-function compressWithZopfli(inputPath: string): Buffer {
+function compressWithZopfli(inputPath: string, iterations: number): Buffer {
   const tmpOutput = `${inputPath}.zopfli.tmp`;
-  console.log(`Compressing with zopfli (exhaustive): ${inputPath}`);
+  console.log(`Compressing with zopfli (i=${iterations}, exhaustive): ${inputPath}`);
 
   try {
-    // Below 2k iter zopfli iter we are not sufficiently using all of zopflis power
-    // Above 2k iter it compresses too hard that the wrapping compression is degraded
-    execSync(`zopfli --deflate --i200 "${inputPath}" -c > "${tmpOutput}"`, {
+    execSync(`zopfli --deflate --i${iterations} "${inputPath}" -c > "${tmpOutput}"`, {
       stdio: ['inherit', 'inherit', 'inherit'],
     });
 
@@ -221,8 +219,8 @@ function compressWithZopfli(inputPath: string): Buffer {
   }
 }
 
-const wasmBase64 = compressWithZopfli(WASM_SOURCE_PATH).toString('base64');
-const wasmPerfBase64 = compressWithZopfli(WASM_PERF_PATH).toString('base64');
+const wasmBase64 = compressWithZopfli(WASM_SOURCE_PATH, 2000).toString('base64');
+const wasmPerfBase64 = compressWithZopfli(WASM_PERF_PATH, 200).toString('base64');
 
 async function buildInlined(variant: 'size' | 'perf') {
   const base64 = variant === 'perf' ? wasmPerfBase64 : wasmBase64;
@@ -251,9 +249,7 @@ async function buildInlined(variant: 'size' | 'perf') {
     if (minified.code) {
       writeFileSync(join(ESM_DIR, `index.inlined${suffix}.min.js`), minified.code);
       const gzipBytes = gzipSync(minified.code, {
-        level: 9,
-        memLevel: 9,
-        windowBits: 15,
+        level: 6
       }).length;
       console.log(
         `Built (minified): index.inlined${suffix}.min.js - ${gzipBytes.toLocaleString()} bytes (${(gzipBytes / 1024).toFixed(2)} KB) gzipped`,

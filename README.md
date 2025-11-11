@@ -23,7 +23,7 @@ from 'zstd-wasm-decoder'; // Default (Node/browser - automatically inferred)
 import { ... } // For strict CSP policies (no unsafe-eval for WASM)
 from 'zstd-wasm-decoder/external'; // .wasm fetched from same-origin
 
-import { ... } // If you need the extra perf. (+30%) for +5kb in the browser
+import { ... } // If you need the extra perf. (+30%) for +4kb in the browser
 from 'zstd-wasm-decoder/perf' // or perf/external
                               // non-browser env uses perf. by default
 
@@ -36,6 +36,7 @@ const data: Uint8Array = await decompress(compressedData, {
   dictionary: await fetch('/dict.bin') 
 });
 ```
+**Note:** In development mode, the inlined version is served for `/external` to avoid bundler issues (e.g., in Vite).
 ```typescript
 // 2. Streaming API - fetch response
 const stream: ReadableStream<string> = (await fetch('/file.zst')).body!
