@@ -2,17 +2,17 @@ export type { BaseWasmExports, DecoderWasmExports } from './types.js';
 
 /**
  * A {@link ReadableStream}/{@link WritableStream} Web Streams API transformer for Zstandard decompression.
- * 
+ *
  * This streaming decompression class allows processing ZSTD-compressed data supplied in chunks,
  * e.g. from a network source, as it arrives. This is useful for situations where you don't have the entire compressed buffer in advance, e.g. long-running network requests.
  *
  * Each chunk written to the writable end is decompressed
  * and delivered as a Uint8Array from the readable end.
- * 
+ *
  * The transform automatically buffers input until
  * enough data is available to read the ZSTD frame header,
  * at which point it allocates decoding resources and begins decompressing.
- * 
+ *
  * The stream will acquire and manage decoders transparently.
  * When the stream is closed, it will release or destroy decoding resources as appropriate.
  *
@@ -47,7 +47,7 @@ export declare class ZstdDecompressionStream {
 
 /**
  * Decompress a Zstandard-compressed buffer into a Uint8Array.
- * 
+ *
  * This is a convenient, Promise-based wrapper for decompressing
  * an entire compressed buffer at once. A convenience for drop-in
  * replacements.
@@ -63,10 +63,7 @@ export declare class ZstdDecompressionStream {
  *
  * @see decompressStream
  */
-export declare function decompress(
-  input: Uint8Array,
-  options?: ZstdOptions
-): Promise<Uint8Array>;
+export declare function decompress(input: Uint8Array, options?: ZstdOptions): Promise<Uint8Array>;
 
 /**
  * Decompresses a Zstandard-compressed stream into a {@link StreamResult}.
@@ -77,7 +74,7 @@ export declare function decompress(
  *
  * This function is suitable for decompressing data that exceeds
  * what can fit in static in/out buffers.
- * 
+ *
  * Note: This is not an incremental streaming API
  * see {@link ZstdDecompressionStream} for streaming input.
  *
@@ -95,7 +92,7 @@ export declare function decompress(
 export declare function decompressStream(
   input: Uint8Array,
   reset?: boolean,
-  options?: ZstdOptions
+  options?: ZstdOptions,
 ): Promise<StreamResult>;
 
 /**
@@ -115,7 +112,7 @@ export declare function decompressStream(
 export declare function decompressSync(
   input: Uint8Array,
   expectedSize?: number,
-  options?: ZstdOptions
+  options?: ZstdOptions,
 ): Uint8Array;
 
 /**

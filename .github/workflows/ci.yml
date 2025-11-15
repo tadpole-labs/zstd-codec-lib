@@ -97,11 +97,7 @@ jobs:
         run: pnpm run clean:decoder
 
       - name: Build (WASM + JS)
-        run: |
-          cd packages/zstd-wasm-decoder
-          LLVM_DIR=$HOME/llvm-21 make all
-        env:
-          CC: clang
+        run: pnpm run build:ts:prep
 
       - name: Install Playwright browsers
         run: pnpm run ci:postinstall:browsers

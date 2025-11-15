@@ -249,7 +249,7 @@ async function buildInlined(variant: 'size' | 'perf') {
     if (minified.code) {
       writeFileSync(join(ESM_DIR, `index.inlined${suffix}.min.js`), minified.code);
       const gzipBytes = gzipSync(minified.code, {
-        level: 6
+        level: 6,
       }).length;
       console.log(
         `Built (minified): index.inlined${suffix}.min.js - ${gzipBytes.toLocaleString()} bytes (${(gzipBytes / 1024).toFixed(2)} KB) gzipped`,
