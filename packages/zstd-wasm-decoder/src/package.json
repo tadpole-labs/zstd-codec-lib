@@ -1,6 +1,6 @@
 {
   "name": "zstd-wasm-decoder",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "type": "module",
   "description": "Tiny & performant decoder-only implementation of Zstandard",
@@ -101,7 +101,7 @@
   "homepage": "https://github.com/tadpole-labs/zstd-codec-lib",
   "sideEffects": false,
   "engines": {
-    "node": ">= 20.19.0",
+    "node": ">=22",
     "npm": ">=8"
   },
   "browserslist": [
