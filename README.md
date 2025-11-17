@@ -73,8 +73,7 @@ const result2: Uint8Array = decoder.decompressSync(data2);
 - Consult [the reference](https://github.com/facebook/zstd/blob/448cd340879adc0ffe36ed1e26823ee2dcb3217b/lib/zstd_errors.h#L60) to interpret error codes, should any occur.
 - **Do not** use the wasm module standalone (without js).
 - **Do not** send any sensitive or cryptographic payloads over a continous, potentially long-running stream. Timing, uniformity and 'compressibility' of data streams are all factors that can compromise encryption.
-<br>
-<sub>
+<br><sub>
 [Side-channel attacks](https://blog.cloudflare.com/ai-side-channel-attack-mitigated/) &nbsp;|&nbsp;
 [CRIME](https://en.wikipedia.org/wiki/CRIME) &nbsp;|&nbsp;
 [BREACH](https://breachattack.com/) &nbsp;|&nbsp;
