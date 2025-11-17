@@ -33,7 +33,7 @@ from 'zstd-wasm-decoder/cloudflare'; // for cloudflare workers
 ```typescript
 // 1. Simple decompression (with optional dictionary)
 const data: Uint8Array = await decompress(compressedData, { 
-  dictionary: await fetch('/dict.bin') 
+  dictionary: await (await fetch('/dict.bin')).arrayBuffer()
 });
 ```
 **Note:** In development mode, the inlined version is served for `/external` to avoid bundler issues (e.g., in Vite).
@@ -45,9 +45,17 @@ const stream: ReadableStream<string> = (await fetch('/file.zst')).body!
 
 // 3. Streaming API - with dictionary
 const ds = new ZstdDecompressionStream({ 
-  dictionary: await fetch('/dict.bin') 
+  dictionary: await (await fetch('/dict.bin')).arrayBuffer()
 });
-const decompressedStream: ReadableStream<Uint8Array> = blob.stream().pipeThrough(ds);
+
+// Alternatively
+import { setupZstdDecoder } from 'zstd-wasm-decoder';
+await setupZstdDecoder({ 
+  dictionaries: ['/dict.bin'] // Accepts URLs
+});
+const ds = new ZstdDecompressionStream(); // Auto-detects dict from frame header
+
+const ds: ReadableStream<Uint8Array> = blob.stream().pipeThrough(ds);
 ```
 ```typescript
 // 4. Manual streaming (for chunked data)

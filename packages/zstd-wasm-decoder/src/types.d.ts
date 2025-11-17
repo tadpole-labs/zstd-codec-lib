@@ -50,7 +50,7 @@ export interface DecoderOptions {
  */
 export interface ZstdOptions {
   /** Dictionary to use for decompression */
-  dictionary?: Uint8Array | ArrayBuffer | Request | string;
+  dictionary?: Uint8Array | ArrayBuffer;
 
   /** Path to the WASM module */
   wasmPath?: string;

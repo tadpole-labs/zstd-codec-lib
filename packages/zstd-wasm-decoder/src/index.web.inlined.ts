@@ -13,6 +13,7 @@ export {
   decompress,
   decompressStream,
   decompressSync,
+  setupZstdDecoder,
   ZstdDecoder,
   ZstdDecompressionStream,
 } from './shared.js';

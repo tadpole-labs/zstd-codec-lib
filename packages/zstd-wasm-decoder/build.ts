@@ -88,7 +88,11 @@ const terserOptions = {
   },
   format: {
     ascii_only: true,
-    comments: /(@__PURE__|@__NO_SIDE_EFFECTS__|#__PURE__|#__NO_SIDE_EFFECTS__)/,
+    comments: (node, comment) => {
+      const text = comment.value;
+      return /^\s*!?\s*(@__PURE__|@__NO_SIDE_EFFECTS__|#__PURE__|#__NO_SIDE_EFFECTS__)/.test(text);
+    },
+    preserve_annotations: true,
     shebang: false,
     webkit: true,
     beautify: false,

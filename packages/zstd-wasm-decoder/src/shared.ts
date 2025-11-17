@@ -24,7 +24,7 @@ let cachedModule: WebAssembly.Module;
 const loadedDictionaries = new Map<number, Uint8Array>();
 
 function /*! @__PURE__ */ _createDecoderInstance(
-  dictionary?: Uint8Array | ArrayBuffer | Request | string,
+  dictionary?: Uint8Array | ArrayBuffer,
 ): ZstdDecoder {
   const dict =
     dictionary instanceof Uint8Array
