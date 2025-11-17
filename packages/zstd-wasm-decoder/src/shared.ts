@@ -23,7 +23,7 @@ let cachedModule: WebAssembly.Module;
 
 const loadedDictionaries = new Map<number, Uint8Array>();
 
-function /* @__PURE__ */ _createDecoderInstance(
+function /*! @__PURE__ */ _createDecoderInstance(
   dictionary?: Uint8Array | ArrayBuffer | Request | string,
 ): ZstdDecoder {
   const dict =
@@ -46,7 +46,7 @@ function /* @__PURE__ */ _createDecoderInstance(
  * @param options.maxDstSize - Maximum decompressed output size in bytes  
  * @param options.dictionaries - Array of dictionary URLs or data URIs to preload
  */
-export const setupZstdDecoder = /* @__PURE__ */ async (options: {
+export const setupZstdDecoder = /*! @__PURE__ */ async (options: {
   maxSrcSize?: number;
   maxDstSize?: number;
   dictionaries?: string[];
@@ -56,7 +56,7 @@ export const setupZstdDecoder = /* @__PURE__ */ async (options: {
 
   if (options.dictionaries) {
     for (const url of options.dictionaries) {
-      const dict = await loadResource(url);
+      const dict = await _loadResource(url);
       const id = _getDictId(dict);
       if (id > 0) loadedDictionaries.set(id, dict);
     }
@@ -123,7 +123,7 @@ export function _pushToPool(
 /**
  * Load resource as Uint8Array
  */
-const loadResource = /* @__PURE__ */ async (
+const _loadResource = /*! @__PURE__ */ async (
   resource: Uint8Array | ArrayBuffer | Request | string,
 ): Promise<Uint8Array> => {
   if (resource instanceof Uint8Array) return resource;
@@ -135,7 +135,7 @@ const loadResource = /* @__PURE__ */ async (
 /**
  * Get dictionary ID from frame header
  */
-const _getDictId = /* @__PURE__ */ (input: Uint8Array): number => {
+const _getDictId = /*! @__PURE__ */ (input: Uint8Array): number => {
   if (input.length < 6) return 0;
   try {
     const header = rzfh(input);
@@ -150,7 +150,7 @@ const _getDictId = /* @__PURE__ */ (input: Uint8Array): number => {
 /**
  * Create a decoder instance
  */
-export const createDecoder = /* @__PURE__ */ async (
+export const createDecoder = /*! @__PURE__ */ async (
   options: ZstdOptions = {},
 ): Promise<ZstdDecoder> => {
   if (!isInitialized) {
@@ -333,7 +333,7 @@ export class ZstdDecompressionStream {
  *
  * @see decompressStream
  */
-export const decompress = /* @__PURE__ */ async (
+export const decompress = /*! @__PURE__ */ async (
   input: Uint8Array,
   options?: ZstdOptions,
 ): Promise<Uint8Array> => {
@@ -365,7 +365,7 @@ export const decompress = /* @__PURE__ */ async (
  *
  * @see ZstdDecompressionStream
  */
-export const decompressStream = /* @__PURE__ */ async (
+export const decompressStream = /*! @__PURE__ */ async (
   input: Uint8Array,
   reset = false,
   options?: ZstdOptions,
@@ -394,7 +394,7 @@ export const decompressStream = /* @__PURE__ */ async (
  * // or without expectedSize:
  * const decompressed = decompressSync(compressedData);
  */
-export const decompressSync = /* @__PURE__ */ (
+export const decompressSync = /*! @__PURE__ */ (
   input: Uint8Array,
   expectedSize?: number,
   options?: ZstdOptions,

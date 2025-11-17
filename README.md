@@ -59,6 +59,20 @@ const result1: Uint8Array = decoder.decompressSync(data1);
 const result2: Uint8Array = decoder.decompressSync(data2);
 ```
 
+### Important Considerations
+- The default export is pre-minified & mangled, and notably, also tested against the full suite to make sure no broken invariants occur due to the transformations. At the root directory you will also find the original version of the source code.
+- Legacy ZSTD format is not supported, and the presence of magic bytes is expected; some libraries have this disabled by default.
+- Consult [the reference](https://github.com/facebook/zstd/blob/448cd340879adc0ffe36ed1e26823ee2dcb3217b/lib/zstd_errors.h#L60) to interpret error codes, should any occur.
+- **Do not** use the wasm module standalone (without js).
+- **Do not** send any sensitive or cryptographic payloads over a continous, potentially long-running stream. Timing, uniformity and 'compressibility' of data streams are all factors that can compromise encryption.
+<br>
+<sub>
+[Side-channel attacks](https://blog.cloudflare.com/ai-side-channel-attack-mitigated/) &nbsp;|&nbsp;
+[CRIME](https://en.wikipedia.org/wiki/CRIME) &nbsp;|&nbsp;
+[BREACH](https://breachattack.com/) &nbsp;|&nbsp;
+[Lucky Thirteen](https://en.wikipedia.org/wiki/Lucky_Thirteen_attack)
+</sub>
+
 ## Contributing
 ### Prerequisites
 
