@@ -14,7 +14,7 @@
     "type": "git",
     "url": "git+https://github.com/tadpole-labs/zstd-codec-lib.git"
   },
-  "packageManager": "pnpm@10.20.0",
+  "packageManager": "pnpm@10.22.0",
   "scripts": {
     "preinstall": "npx -y only-allow pnpm",
     "test": "pnpm run test:all-runtimes",
@@ -63,7 +63,7 @@
     "terser": "5.44.1",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
-    "vitest": "4.0.9"
+    "vitest": "4.0.12"
   },
   "license": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
 }

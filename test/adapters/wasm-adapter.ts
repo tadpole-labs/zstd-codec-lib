@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 
-import type { ZstdDecoder, ZstdOptions } from '../../packages/zstd-wasm-decoder/src/types.js';
+import type { ZstdOptions } from '../../packages/zstd-wasm-decoder/src/types.js';
+import type { ZstdDecoder } from '../../packages/zstd-wasm-decoder/src/zstd-wasm.js';
 import { slice } from '../lib/utils.js';
 
 // Dynamically select which build variant to test based on TEST_VARIANT env var

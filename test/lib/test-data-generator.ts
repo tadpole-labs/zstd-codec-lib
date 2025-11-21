@@ -1,5 +1,5 @@
-import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,22 +29,32 @@ export function ensureTestData(): void {
   const zstd = `${ZSTD_DIR}/zstd`;
 
   if (!existsSync(datagen)) {
-    execSync('make datagen', { cwd: `${ZSTD_DIR}/tests`, stdio: 'pipe' });
+    execFileSync('make', ['datagen'], { cwd: `${ZSTD_DIR}/tests`, stdio: 'pipe' });
   }
   if (!existsSync(zstd)) {
-    execSync('make zstd', { cwd: ZSTD_DIR, stdio: 'pipe' });
+    execFileSync('make', ['zstd'], { cwd: ZSTD_DIR, stdio: 'pipe' });
   }
 
   TEST_FILES.forEach(([name, args]) => {
-    execSync(`${datagen} ${args} > ${DATA_DIR}/${name}`, {
-      shell: '/bin/sh',
-      encoding: 'buffer',
-    });
+    const filePath = join(DATA_DIR, name);
+    const fd = openSync(filePath, 'w');
+    try {
+      spawnSync(datagen, args.split(' '), {
+        stdio: ['ignore', fd, 'inherit'],
+      });
+    } finally {
+      closeSync(fd);
+    }
   });
 
   const dictFile = `${DICT_DIR}/test.dict`;
   if (!existsSync(dictFile)) {
-    execSync(`${zstd} --train ${DATA_DIR}/*.bin -o ${dictFile} --maxdict=16384`, { stdio: 'pipe' });
+    const binFiles = readdirSync(DATA_DIR)
+      .filter((f) => f.endsWith('.bin'))
+      .map((f) => join(DATA_DIR, f));
+    execFileSync(zstd, ['--train', ...binFiles, '-o', dictFile, '--maxdict=16384'], {
+      stdio: 'pipe',
+    });
   }
 
   const testJsonPath = join(DATA_DIR, 'test.json');
@@ -63,9 +73,13 @@ export function ensureTestData(): void {
 
     const jsonDictFile = `${DICT_DIR}/test.json.dict`;
     if (!existsSync(jsonDictFile)) {
-      execSync(`${zstd} --train ${DATA_DIR}/test.json -o ${jsonDictFile} --maxdict=8192`, {
-        stdio: 'pipe',
-      });
+      execFileSync(
+        zstd,
+        ['--train', join(DATA_DIR, 'test.json'), '-o', jsonDictFile, '--maxdict=8192'],
+        {
+          stdio: 'pipe',
+        },
+      );
     }
   }
 }

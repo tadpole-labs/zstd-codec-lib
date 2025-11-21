@@ -1,7 +1,16 @@
 #!/usr/bin/env bun
 
-import { execSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execSync, spawnSync } from 'node:child_process';
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { deflateRawSync, gzipSync } from 'node:zlib';
 import { minify } from 'terser';
@@ -202,12 +211,21 @@ function compressWithZopfli(inputPath: string, iterations: number): Buffer {
   console.log(`Compressing with zopfli (i=${iterations}, exhaustive): ${inputPath}`);
 
   try {
-    execSync(`zopfli --deflate --i${iterations} "${inputPath}" -c > "${tmpOutput}"`, {
-      stdio: ['inherit', 'inherit', 'inherit'],
-    });
+    const fd = openSync(tmpOutput, 'w');
+    try {
+      const result = spawnSync('zopfli', ['--deflate', `--i${iterations}`, inputPath, '-c'], {
+        stdio: ['inherit', fd, 'inherit'],
+      });
+      if (result.error) throw result.error;
+      if (result.status !== 0) throw new Error(`zopfli exited with code ${result.status}`);
+    } finally {
+      closeSync(fd);
+    }
 
     const compressed = readFileSync(tmpOutput);
-    execSync(`rm "${tmpOutput}"`);
+    try {
+      unlinkSync(tmpOutput);
+    } catch (e) {}
 
     console.log(`  Original: ${readFileSync(inputPath).length.toLocaleString()} bytes`);
     console.log(`  Compressed: ${compressed.length.toLocaleString()} bytes`);
