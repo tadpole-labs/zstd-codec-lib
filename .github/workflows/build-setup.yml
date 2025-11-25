@@ -24,11 +24,11 @@ env:
   LLVM_ARM64_ATTESTATION: ".github/attestations/LLVM-21.1.5-Linux-ARM64.tar.xz.jsonl"
   
   # Binaryen Configuration
-  BINARYEN_VERSION: "124"
-  BINARYEN_X64_URL: "https://github.com/WebAssembly/binaryen/releases/download/version_124/binaryen-version_124-x86_64-linux.tar.gz"
-  BINARYEN_X64_SHA256: "0290c3779fedf592b8da0ded3032ff55c41a2b7bfa2d6bf7b7bac6f0e6e28963"
-  BINARYEN_ARM64_URL: "https://github.com/WebAssembly/binaryen/releases/download/version_124/binaryen-version_124-aarch64-linux.tar.gz"
-  BINARYEN_ARM64_SHA256: "6291bd9a57d8e046f3bc099a4db386c147433a87f71c783a901c5b1792e38de3"
+  BINARYEN_VERSION: "125"
+  BINARYEN_X64_URL: "https://github.com/WebAssembly/binaryen/releases/download/version_125/binaryen-version_125-x86_64-linux.tar.gz"
+  BINARYEN_X64_SHA256: "7c3bc16599c8274a04d34a504fe4be2047884f900e0e2da2f6fb9cd667183be4"
+  BINARYEN_AARCH64_URL: "https://github.com/WebAssembly/binaryen/releases/download/version_125/binaryen-version_125-aarch64-linux.tar.gz"
+  BINARYEN_AARCH64_SHA256: "d0382de3c189a7cbb9fdda93e2966f4557f6a00f201e2c4937c27ca01cead4fc"
   
   # Zopfli Configuration
   ZOPFLI_COMMIT: "ccf9f0588d4a4509cb1040310ec122243e670ee6"
@@ -65,7 +65,7 @@ jobs:
             ~/zopfli
           key: ${{ steps.keygen.outputs.key }}
 
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
         if: steps.cache-deps.outputs.cache-hit != 'true'
         with:
           submodules: recursive
@@ -85,8 +85,8 @@ jobs:
           LLVM_ARM64_ATTESTATION: ${{ env.LLVM_ARM64_ATTESTATION }}
           BINARYEN_X64_URL: ${{ env.BINARYEN_X64_URL }}
           BINARYEN_X64_SHA256: ${{ env.BINARYEN_X64_SHA256 }}
-          BINARYEN_ARM64_URL: ${{ env.BINARYEN_ARM64_URL }}
-          BINARYEN_ARM64_SHA256: ${{ env.BINARYEN_ARM64_SHA256 }}
+          BINARYEN_AARCH64_URL: ${{ env.BINARYEN_AARCH64_URL }}
+          BINARYEN_AARCH64_SHA256: ${{ env.BINARYEN_AARCH64_SHA256 }}
           ZOPFLI_REPO: ${{ env.ZOPFLI_REPO }}
           ZOPFLI_COMMIT: ${{ env.ZOPFLI_COMMIT }}
         run: |
@@ -113,7 +113,7 @@ jobs:
           if [ "$ARCH" = "x86_64" ]; then
             BURL="${BINARYEN_X64_URL}"; BSHA="${BINARYEN_X64_SHA256}"
           else
-            BURL="${BINARYEN_ARM64_URL}"; BSHA="${BINARYEN_ARM64_SHA256}"
+            BURL="${BINARYEN_AARCH64_URL}"; BSHA="${BINARYEN_AARCH64_SHA256}"
           fi
           wget -q --show-progress --progress=dot:giga -O binaryen.tar.gz "$BURL"
           echo "${BSHA}  binaryen.tar.gz" | sha256sum -c -
