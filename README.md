@@ -4,7 +4,7 @@ Tiny & performant decoder-only implementation of Zstandard.
 
 |          |                                                                                                                                                                                                                         |
 |----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **Lightweight**      | 13kb / 17kb (zipped) for size or perf. optimized build                                                                                                                                |
+| **Lightweight**      | 13.2kb / 17.18kb (zipped) for size or perf. optimized build                                                                                                                                |
 | **Dictionary Support** | Multiple and up to 2MB each                                                                                                                                    |
 | **Performant**       | ~1.6x throughput vs Node.js zlib (V8), ~0.96x vs Bun (JSC)                                                                                                                          |
 | **Compatibility**    | • [DecompressionStream API ponyfill](https://developer.mozilla.org/en-US/docs/Web/API/DecompressionStream)<br>• [>94% worldwide browsers](https://browsersl.ist/#q=%3E0.3%25%2C+chrome+%3E%3D+80%2C+edge+%3E%3D+80%2C+firefox+%3E%3D+113%2C+safari+%3E%3D+16.4%2C+ios_saf+%3E%3D+16.4%2C+not+dead%2C+fully+supports+wasm-simd%2C+fully+supports+wasm-bulk-memory%2C+fully+supports+wasm-signext)<br>• Node 20-24, Cloudflare Workers, Vite, Bun<br>• Can be loaded as [pre-compressed](https://github.com/tadpole-labs/zstd-codec-lib/blob/main/packages/zstd-wasm-decoder/build.ts#L182) inline base64<br> or as separate .wasm for [CSP compliance](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src#unsafe_webassembly_execution)  |
@@ -68,7 +68,7 @@ const result2: Uint8Array = decoder.decompressSync(data2);
 ```
 
 ### Important Considerations
-- The default export is pre-minified & mangled, and notably, also tested against the full suite to make sure no broken invariants occur due to the transformations. At the root directory you will also find the original version of the source code.
+- The default export is pre-minified & mangled, and notably, also tested against the full suite to make sure no broken invariants occur due to the transformations.
 - Legacy ZSTD format is not supported, and the presence of magic bytes is expected; some libraries have this disabled by default.
 - Consult [the reference](https://github.com/facebook/zstd/blob/448cd340879adc0ffe36ed1e26823ee2dcb3217b/lib/zstd_errors.h#L60) to interpret error codes, should any occur.
 - **Do not** use the wasm module standalone (without js).
