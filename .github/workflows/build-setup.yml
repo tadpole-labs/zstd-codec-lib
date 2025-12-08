@@ -15,13 +15,13 @@ permissions:
 
 env:
   # LLVM Configuration
-  LLVM_VERSION: "21.1.5"
-  LLVM_X64_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.5/LLVM-21.1.5-Linux-X64.tar.xz"
-  LLVM_X64_FILE: "LLVM-21.1.5-Linux-X64.tar.xz"
-  LLVM_X64_ATTESTATION: ".github/attestations/LLVM-21.1.5-Linux-X64.tar.xz.jsonl"
-  LLVM_ARM64_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.5/LLVM-21.1.5-Linux-ARM64.tar.xz"
-  LLVM_ARM64_FILE: "LLVM-21.1.5-Linux-ARM64.tar.xz"
-  LLVM_ARM64_ATTESTATION: ".github/attestations/LLVM-21.1.5-Linux-ARM64.tar.xz.jsonl"
+  LLVM_VERSION: "21.1.7"
+  LLVM_X64_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.7/LLVM-21.1.7-Linux-X64.tar.xz"
+  LLVM_X64_FILE: "LLVM-21.1.7-Linux-X64.tar.xz"
+  LLVM_X64_ATTESTATION: ".github/attestations/LLVM-21.1.7-Linux-X64.tar.xz.jsonl"
+  LLVM_ARM64_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.7/LLVM-21.1.7-Linux-ARM64.tar.xz"
+  LLVM_ARM64_FILE: "LLVM-21.1.7-Linux-ARM64.tar.xz"
+  LLVM_ARM64_ATTESTATION: ".github/attestations/LLVM-21.1.7-Linux-ARM64.tar.xz.jsonl"
   
   # Binaryen Configuration
   BINARYEN_VERSION: "125"

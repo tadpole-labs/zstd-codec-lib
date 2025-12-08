@@ -15,9 +15,9 @@ python3 "$FREESTANDING_SCRIPT" \
   --output-lib "$TEMP_LIB" \
   --zstd-deps "$ZSTD_SRC_ROOT/common/zstd_deps.h" \
   --mem "$ZSTD_SRC_ROOT/common/mem.h" \
-  -UZSTD_LEGACY_SUPPORT \
   -DZSTD_STATIC_LINKING_ONLY \
   -DMEM_FORCE_MEMORY_ACCESS=2 \
+  -UZSTD_LEGACY_SUPPORT \
   -DZSTD_DEPS_NEED_MALLOC
 
 if [ $? -ne 0 ]; then
@@ -30,6 +30,7 @@ echo "Amalgamating with WASM wrapper..."
 python3 "$COMBINE_SCRIPT" \
   -r "$TEMP_LIB" \
   -r "$SCRIPT_DIR/include" \
+  -x legacy/zstd_legacy.h \
   -o zstd_wasm_amalgamated.c \
   zstd_wasm_full.c
 

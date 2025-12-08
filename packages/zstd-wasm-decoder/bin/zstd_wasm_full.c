@@ -30,12 +30,6 @@
  * You may select, at your option, one of the above-listed licenses.
  */
 
-/*
- * ============================================================================
- * PART 1: Compiler Defines (from Makefile CFLAGS)
- * ============================================================================
- */
-
 
 /* 
     In wasm, there is two possible memory layouts that we get out-of-the box
@@ -49,27 +43,21 @@
          Static Mem
     Stack           Heap    ---     Heap    >>>
 
-    Does not seem to be trivial.
+    Doesn't work as the linker script / order of the data section seems to be ignored.
 
-    But why do so?
-
-    0.) Ring buf is the most efficient & memory friendly way of decompressing data.
-    1.) We have to put the stack down. And the growing & periodically resetted ring buf higher up.
-        Having the in & out buf pointer structs + heap cursor + dctx ptr in one place & at low offsets
-        is desired as the only remaining pointers to manage / reason about, are src & dst buf.
-    2.) This also means that we can go less back and forth between the WASM & JS world. (overhead)
-        We don't ask for malloc and pointers, we just write data to predictable areas of memory,
-        let zstd do its job, and flush to js.
-        And neither, do we have to give up full control to the wasm module.
+    ---
+    - Ring buf is the most efficient & memory friendly way of decompressing data.
     
-    Now the issue: The linker script / order of the data section seems to be ignored.
+    - We have to put the stack down. And the growing & periodically resetted ring buf higher up.
+    Having the in & out buf pointer structs + dctx ptr in one place & at low offsets
+    is easier to reson about, with the only remaining pointers to manage being src & dst buf.
     
     .rodata containing 2208 bytes of constants for the decompression context is being put right
     after the stack.
-
+    
     To get to the following layout.
-                            
-                             4b srcPtr         4b srcPtr
+      
+                             4b srcPtr          4b srcPtr
                                 4b size            4b size     
                                    4b pos             4b pos
                                       4b pad             4b pad                Dctx
@@ -79,8 +67,7 @@
                         8192               8208                8224            8224        104028 
     
     The statically allocated dctx consumes about 96k bytes. The final number is rounded up,
-    such that the constants for the access to those static data throughout the bytecode are
-    better aligned & compressible.
+    so that static data offsets are better aligned > compressible.
 */
 
 
@@ -115,7 +102,7 @@ typedef struct {
     unsigned char pad2[4];
 } __attribute__((aligned(32))) ZstdBufsObject;
 
-__attribute__((section(".rodata"))) // It is not read only, but the only way to have the compiler respect the order since linker scripts are not working.
+__attribute__((section(".rodata"))) // It is not read only, but the only way to have llvm respect the order since linker scripts are not working.
 
 // Same for decompression context
 // Rationale: Keep writes as far away as possible from the dctx, and the vital pointer structs (those above)
@@ -313,7 +300,7 @@ void cd(const void* dict, size_t dictSize) {
 }
 
 /*
-    Manually folded / inlined ZSTD_decompressBegin_usingDDict
+    ZSTD_decompressBegin_usingDDict
 */
 static size_t decompressBegin_usingDDict(void)
 {   
@@ -331,7 +318,7 @@ static size_t decompressBegin_usingDDict(void)
 }
 
 /*
-    Manually folded / inlined ZSTD_decompressMultiFrame
+    ZSTD_decompressMultiFrame
     
     dict case removed as never have undigest dictionaries.
     so dict is always NULL.
@@ -389,7 +376,7 @@ static size_t dm(void* dst, size_t dstCapacity, const void* src, size_t srcSize)
 
 
 /*
-    Manually folded / inlined ZSTD_decompress_usingDDict > MultiFrame
+    ZSTD_decompress_usingDDict > MultiFrame
 */
 WASM_EXPORT
 size_t dS(void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
@@ -397,8 +384,6 @@ size_t dS(void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
 }
 
 /*
-    Manually folded / inlined
-
     ZSTD_decompressStream(ZSTD_DCtx* zds, ZSTD_outBuffer* output, ZSTD_inBuffer* input)
     
     Removed static dctx check branch, and bunch of other stuff that the compiler is too shy to optimize away.

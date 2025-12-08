@@ -193,16 +193,13 @@ for (const config of configs) {
 }
 /**
  * Pre-compress with deflate-raw using zopfli for maximum compression before encoding to base64.
- *
  * Yields a smaller bundle size when compressed twice
  *
  * Opaque + decomp. via DecompressionStream API
- *
  * .wasm  =>  zopfli deflate  =>  base64  =>  .js  => gzip/brotli/zstd
  *
  * Comparatively the cost of an additional network request
  * to shave off the extra bytes by splitting the .wasm and .js module
- *
  * isn't worth it (for slim modules)
  */
 

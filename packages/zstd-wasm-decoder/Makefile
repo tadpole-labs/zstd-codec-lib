@@ -36,11 +36,7 @@ CFLAGS += -ffreestanding
 CFLAGS += -msimd128
 CFLAGS += -msign-ext
 
-# CFLAGS += -mtail-call - good feature to reduce stack needs
-# might need the one or another manual hint to the compiler
-# currently its only placed at two places (automatically)
-# barely yielding perf. benefits. Also supported since chrome 121
-# which is probably too early for a published lib as of now
+# CFLAGS += -mtail-call # good feature to reduce stack needs
 CFLAGS += -mno-atomics
 CFLAGS += -mbulk-memory
 CFLAGS += -mexec-model=reactor

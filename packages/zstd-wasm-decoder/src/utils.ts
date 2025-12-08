@@ -36,7 +36,6 @@ export const rzfh = /*! @__PURE__ */ (dat: Uint8Array): number | DZS => {
     const ss = (flg >> 5) & 1,      // single segment
       df = flg & 3,                 // dict flag
       fcf = flg >> 6;               // frame content flag
-    if (flg & 8) throw new err('bad zstd dat'); // Reserved bit check
     // byte
     const bt = 6 - ss;
     // dict bytes

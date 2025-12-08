@@ -1,6 +1,6 @@
 {
   "name": "zstd-wasm-decoder",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": false,
   "type": "module",
   "description": "Tiny & performant decoder-only implementation of Zstandard",

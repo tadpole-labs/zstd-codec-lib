@@ -15,7 +15,7 @@ node_modules
 /test/benchmark/compressed/*.zst
 /test/benchmark/compressed/*.json
 /test/data/*.json
-
+/archive
 *.dll
 *.so
 *.so.*

@@ -38,14 +38,6 @@ function /*! @__PURE__ */ _createDecoderInstance(
   return decoder;
 }
 
-/**
- * Configure global decoder settings.
- * 
- * @param options - Configuration options
- * @param options.maxSrcSize - Maximum compressed input size in bytes
- * @param options.maxDstSize - Maximum decompressed output size in bytes  
- * @param options.dictionaries - Array of dictionary URLs or data URIs to preload
- */
 export const setupZstdDecoder = /*! @__PURE__ */ async (options: {
   maxSrcSize?: number;
   maxDstSize?: number;
@@ -91,7 +83,7 @@ async function _acquireDecoder(
     dictId > 0 ? options?.dictionary || loadedDictionaries.get(dictId) : undefined,
   );
 
-  if (locks.length > 1) return [decoder, -1, dictId];
+  if (locks.length > 2) return [decoder, -1, dictId];
 
   const newIdx = locks.length;
   pool.set(newIdx, decoder);
@@ -132,9 +124,6 @@ const _loadResource = /*! @__PURE__ */ async (
   return new Uint8Array(await response.arrayBuffer());
 };
 
-/**
- * Get dictionary ID from frame header
- */
 const _getDictId = /*! @__PURE__ */ (input: Uint8Array): number => {
   if (input.length < 6) return 0;
   try {
@@ -147,9 +136,6 @@ const _getDictId = /*! @__PURE__ */ (input: Uint8Array): number => {
   }
 };
 
-/**
- * Create a decoder instance
- */
 export const createDecoder = /*! @__PURE__ */ async (
   options: ZstdOptions = {},
 ): Promise<ZstdDecoder> => {
@@ -160,9 +146,6 @@ export const createDecoder = /*! @__PURE__ */ async (
   return _createDecoderInstance(options.dictionary);
 };
 
-/**
- * Convert BufferSource to Uint8Array
- */
 const _toUint8Array = (chunk: BufferSource): Uint8Array => {
   if (chunk instanceof Uint8Array) return chunk;
   if (ArrayBuffer.isView(chunk))
@@ -170,34 +153,6 @@ const _toUint8Array = (chunk: BufferSource): Uint8Array => {
   return new Uint8Array(chunk as ArrayBuffer);
 };
 
-/**
- * A {@link ReadableStream}/{@link WritableStream} Web Streams API transformer for Zstandard decompression.
- * 
- * This streaming decompression class allows processing ZSTD-compressed data supplied in chunks,
- * e.g., from a network source, as it arrives. This is useful for situations where you don't have 
- * the entire compressed buffer in advance, e.g., long-running network requests.
- *
- * Each chunk written to the writable end is decompressed
- * and delivered as a Uint8Array from the readable end.
- * 
- * The transform automatically buffers input until
- * enough data is available to read the ZSTD frame header,
- * at which point it allocates decoding resources and begins decompressing.
- * 
- * The stream will acquire and manage decoders transparently.
- * When the stream is closed, it will release or destroy decoding resources as appropriate.
- *
- * @example
- * ```ts
- * const ds = new ZstdDecompressionStream();
- * const response = await fetch('/file.zst');
- * const decompressedStream = response.body.pipeThrough(ds);
- * ```
- *
- * @see {@link ReadableStream}
- * @see {@link WritableStream}
- * @see {@link decompressStream}
- */
 export class ZstdDecompressionStream {
   /**
    * The resulting decompressed stream to read output from.
@@ -227,11 +182,6 @@ export class ZstdDecompressionStream {
     let minRecvSize: number = 262144;
 
     const { readable, writable } = new TransformStream<BufferSource, Uint8Array>({
-      /**
-       * Transforms incoming compressed chunks into decompressed output chunks.
-       * @param {BufferSource} chunk - The incoming compressed data chunk.
-       * @param {TransformStreamDefaultController<Uint8Array>} controller - Stream controller to enqueue output.
-       */
       async transform(
         chunk: BufferSource,
         controller: TransformStreamDefaultController<Uint8Array>,
@@ -281,12 +231,6 @@ export class ZstdDecompressionStream {
         }
       },
 
-      /**
-       * - Called when all input is written.
-       * - Ensures all remaining data is flushed through the decoder.
-       * - Releases decoder resources.
-       * @param {TransformStreamDefaultController<Uint8Array>} controller 
-       */
       async flush(controller: TransformStreamDefaultController<Uint8Array>) {
         if (bytesWritten == 0 && bytesRead > 6) {
           try {
@@ -315,24 +259,6 @@ export class ZstdDecompressionStream {
   }
 }
 
-/**
- * Decompress a Zstandard-compressed buffer into a Uint8Array.
- * 
- * This is a convenient, Promise-based wrapper for decompressing
- * an entire compressed buffer at once. A convenience for drop-in
- * replacements.
- *
- * Internally, this calls {@link decompressStream} and returns only `.buf`.
- *
- * @param {Uint8Array} input - The compressed Zstandard data.
- * @param {ZstdOptions} [options] - Optional decompression options.
- * @returns {Promise<Uint8Array>} Resolves with the decompressed buffer.
- *
- * @example
- * const decompressed = await decompress(compressedData);
- *
- * @see decompressStream
- */
 export const decompress = /*! @__PURE__ */ async (
   input: Uint8Array,
   options?: ZstdOptions,
@@ -340,31 +266,6 @@ export const decompress = /*! @__PURE__ */ async (
   return (await decompressStream(input, true, options)).buf;
 };
 
-/**
- * Decompresses a Zstandard-compressed buffer into a {@link StreamResult}.
- *
- * Use this function when the entire input is already fully available in memory,
- * or if you want to decompress large data while still giving the main thread
- * some breathing room.
- *
- * This function is suitable for decompressing data that exceeds
- * what can fit in static in/out buffers.
- * 
- * Note: This is not an incremental streaming API
- * see {@link ZstdDecompressionStream} for streaming input.
- *
- * @param {Uint8Array} input - The compressed Zstandard data.
- * @param {boolean} [reset=false] - Whether to reset the decoder context before decompression (default: false).
- * @param {ZstdOptions} [options] - Optional decompression options (e.g., dictionary).
- * @returns {Promise<StreamResult>} Resolves with the decompressed output and number of input bytes consumed.
- *
- * @example
- * const result = await decompressStream(compressedData, true);
- * // result.buf contains the decompressed output
- * // result.in_offset contains the number of input bytes consumed
- *
- * @see ZstdDecompressionStream
- */
 export const decompressStream = /*! @__PURE__ */ async (
   input: Uint8Array,
   reset = false,
@@ -377,23 +278,6 @@ export const decompressStream = /*! @__PURE__ */ async (
   return result;
 };
 
-/**
- * Decompress a Zstandard-compressed buffer synchronously.
- *
- * This function provides fast synchronous decompression. If the expected size
- * is not provided, it will be read from the frame header. For data that exceeds
- * internal buffer limits, this automatically falls back to streaming decompression.
- *
- * @param {Uint8Array} input - The compressed Zstandard data.
- * @param {number} [expectedSize] - Optional expected size of the decompressed output, in bytes.
- * @param {ZstdOptions} [options] - Optional decompression options (e.g., dictionary).
- * @returns {Uint8Array} The decompressed output buffer.
- *
- * @example
- * const decompressed = decompressSync(compressedData, 123456);
- * // or without expectedSize:
- * const decompressed = decompressSync(compressedData);
- */
 export const decompressSync = /*! @__PURE__ */ (
   input: Uint8Array,
   expectedSize?: number,

@@ -43,6 +43,7 @@ let fixtureServer: any;
 
 let decompressAdapter: any;
 
+// Hash + compare faster than byte for byte comparison
 const compressedCache = new Map<string, Buffer>();
 const originalDataHashes = new Map<string, string>();
 
